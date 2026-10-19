@@ -129,14 +129,57 @@ Formato: data · contexto · opções · decisão · motivo (e risco, quando a d
   Git: commit ao fim de cada passo após o OK; push nos passos 1, 3, 5, 7, 9b, 10 e 11.
 - **Motivo:** cada passo termina com algo verificável. Os riscos maiores (tool-calling do modelo local, avaliação) aparecem cedo.
 
+## D13 — Validação de contratos com Zod 4
+- **Data:** 2026-10-19
+- **Opções:** Zod 4 · validação manual.
+- **Decisão:** `zod@^4` (4.6.7). Compatível com `@langchain/core` 1.2 (`^3.25.76 || ^4`) e `@langchain/langgraph` 1.5 (`^4.2.0`).
+- **Motivo:** um schema serve ao mesmo tempo como validação em tempo de execução, tipo TypeScript (`z.infer`) e JSON Schema da tool para o modelo (Passo 3). Validação manual seria mais código e perderia essa integração.
+
+## D14 — Nomes das tools e dos argumentos
+- **Data:** 2026-10-19
+- **Opções:** `get_ticket` + `register_escalation` · `get_ticket` + `escalate_ticket`.
+- **Decisão:** `listar_chamados(situacao)` (obrigatório pelo PDF), `get_ticket(ticket_id)` e `register_escalation(ticket_id, summary, justification)`. Tudo que o modelo vê fica em snake_case.
+- **Motivo:** `register_escalation` traduz literalmente "Registrar escalonamento" do PDF e deixa explícito que é uma operação de escrita.
+
+## D15 — Descrições das tools e dos campos em português
+- **Data:** 2026-10-19
+- **Opções:** PT · EN.
+- **Decisão:** PT (fecha o ponto pendente da D06).
+- **Motivo:** as descrições são instruções ao modelo, da mesma natureza do system prompt (PT pela D06). Também ficam coerentes com as mensagens do usuário em PT.
+
+## D16 — Formato do chamado e massa de dados
+- **Data:** 2026-10-19
+- **Opções:** campo de estado `situacao` · `status`.
+- **Decisão:**
+  - Chamado = `{ id, title, description, customer, situacao }`, com `situacao` no enum fechado `"aberto" | "resolvido"`.
+  - Massa: CH-101 e CH-103 abertos, CH-102 e CH-104 resolvidos. **Nenhum outro aberto.**
+  - O `ticket_id` é normalizado (`" ch-101 "` vira `"CH-101"`) e validado no formato `CH-<número>`.
+  - Os mocks são validados pelo schema no carregamento, e as funções devolvem cópias (ninguém altera os mocks).
+- **Motivo:** o campo de estado tem o mesmo nome do filtro, então o modelo não precisa mapear `situacao` para `status`. Um terceiro chamado aberto quebraria o critério "sem registros extras" do caso obrigatório. (Resolve P1 e P2.)
+
+## D17 — Erros de negócio como dado, não como exceção
+- **Data:** 2026-10-19
+- **Opções:** (a) retorno `{ ok: true, data } | { ok: false, error: { code, message } }` · (b) lançar exceções tipadas.
+- **Decisão:** (a) para erros de negócio. Os códigos atuais são `TICKET_NOT_FOUND`, `TICKET_NOT_OPEN` e `ALREADY_ESCALATED`, e as mensagens ficam em PT. Exceção fica reservada para falha técnica (por exemplo, a falha transitória do Passo 5, que terá retry).
+- **Motivo:** o modelo recebe o erro como resultado da tool e não tem como entender que a operação ocorreu. O teste checa o `code`, e o trace mostra o erro estruturado. Separar o erro esperado (negócio) da falha técnica deixa claro o que deve ter retry.
+
+## D18 — Store de escalonamentos em memória e injetável (sem banco)
+- **Data:** 2026-10-19
+- **Opções:** (a) `createEscalationStore()` injetado nas funções · (b) variável global do módulo com `reset()` para os testes · (c) banco de dados (SQLite/Postgres).
+- **Decisão:** (a).
+  - `registerEscalation(store, input)` aplica as guardas: chamado existe, está aberto e ainda não foi escalonado (camada 2 da D11).
+  - A idempotência por id da proposta (camada 1) fica para o Passo 4.
+- **Motivo:**
+  - Cada teste cria o seu store, sem contaminação entre testes.
+  - **Sobre banco de dados (pergunta do Guilherme):** não é necessário, porque o PDF pede registro "simulado", aceita "dados locais" e diz que "checkpoint em memória é suficiente". As regras avaliadas (bloqueio, idempotência, não confirmar o que não ocorreu) ficam na função de registro e funcionam igual com memória ou com banco. O store tem uma interface pequena (`add`, `findByTicketId`, `list`), então trocar por SQLite ou Postgres em produção mexeria só nessa implementação.
+- **Trade-off aceito:** reiniciar o servidor apaga os escalonamentos. Vai para as limitações do README.
+
 ---
 
 ## Propostas em aberto (confirmar no passo indicado)
 
 | # | Proposta | Passo |
 |---|----------|-------|
-| P1 | Massa de dados: **apenas** CH-101 e CH-103 abertos. Qualquer outro chamado aberto quebraria o critério "sem registros extras" da avaliação. Os extras serão resolvidos. | 2 |
-| P2 | `situacao` como enum fechado `"aberto" \| "resolvido"`, em ASCII; sem filtro, a tool lista todos. | 2 |
 | P3 | A proposta nasce da tool call de escalonamento emitida pelo modelo. O executor valida e chama `interrupt` **antes** de executar, e a proposta exibida são os argumentos validados. | 4 |
 | P4 | O bloqueio de chamado não aberto é checado na criação da proposta **e** de novo no registro. | 4 |
 | P6 | Falha transitória determinística e injetável (por exemplo, falhar as N primeiras chamadas), nunca aleatória. | 5 |

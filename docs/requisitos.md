@@ -10,11 +10,11 @@ Status: ⬜ pendente · 🟨 parcial · ✅ atendido
 |-----|-----------|-------|--------|
 | R01 | Assistente de suporte da empresa fictícia **Aurora**: consulta chamados, lista os abertos e prepara escalonamento para revisão humana. | 3–7 | ⬜ |
 | R02 | Fluxo: solicitação → consulta → proposta (resumo + justificativa) → aprovação → registro → resultado. Rejeição encerra sem registrar; consulta simples termina após a resposta. | 4 | ⬜ |
-| R03 | Tool `listar_chamados` com filtro pelo argumento `situacao` (nomes obrigatórios). | 2 | ⬜ |
-| R04 | Tool de consulta de chamado por identificador (nome livre). | 2 | ⬜ |
-| R05 | Tool de registro de escalonamento (chamado, resumo, justificativa), simulado, somente após aprovação (nome livre). | 2, 4 | ⬜ |
-| R06 | Mocks e testes próprios; massa com CH-101 e CH-103 abertos e CH-102 resolvido. Sem API HTTP. | 2 | ⬜ |
-| R07 | **Regra:** só chamado aberto pode ser escalonado. Nunca inventar dados nem confirmar operação que não ocorreu. | 2, 4 | ⬜ |
+| R03 | Tool `listar_chamados` com filtro pelo argumento `situacao` (nomes obrigatórios). | 2, 3 | 🟨 |
+| R04 | Tool de consulta de chamado por identificador (nome livre). | 2, 3 | 🟨 |
+| R05 | Tool de registro de escalonamento (chamado, resumo, justificativa), simulado, somente após aprovação (nome livre). | 2, 4 | 🟨 |
+| R06 | Mocks e testes próprios; massa com CH-101 e CH-103 abertos e CH-102 resolvido. Sem API HTTP. | 2 | ✅ |
+| R07 | **Regra:** só chamado aberto pode ser escalonado. Nunca inventar dados nem confirmar operação que não ocorreu. | 2, 4 | 🟨 |
 | R08 | O modelo emite a tool call com argumentos; o executor valida e executa a função mockada; a resposta usa o retorno. Nada de resposta fixa. | 3 | ⬜ |
 | R09 | Orquestração em LangGraph, estado tipado e contratos validados. | 3 | ⬜ |
 | R10 | Contexto mantido entre requisições; sessões diferentes separadas. Checkpoint em memória basta. | 3 | ⬜ |
