@@ -9,35 +9,35 @@ import {
 } from "./schemas";
 
 // Fictitious data. Only CH-101 and CH-103 may be "aberto": the mandatory
-// evaluation case expects exactly these two, with no extra records (P1).
+// evaluation case expects exactly these two, with no extra records (D16).
 // Parsed at load time so a malformed mock fails fast.
 const TICKETS: readonly Ticket[] = TicketSchema.array().parse([
   {
     id: "CH-101",
-    title: "Erro ao emitir nota fiscal",
-    description: "Desde ontem o sistema retorna erro 500 ao emitir nota fiscal eletrônica.",
-    customer: "Padaria Pão Dourado",
+    titulo: "Erro ao emitir nota fiscal",
+    descricao: "Desde ontem o sistema retorna erro 500 ao emitir nota fiscal eletrônica.",
+    cliente: "Padaria Pão Dourado",
     situacao: "aberto",
   },
   {
     id: "CH-102",
-    title: "Senha bloqueada",
-    description: "Usuário bloqueado após tentativas de login; senha redefinida pelo suporte.",
-    customer: "Clínica Vida Plena",
+    titulo: "Senha bloqueada",
+    descricao: "Usuário bloqueado após tentativas de login; senha redefinida pelo suporte.",
+    cliente: "Clínica Vida Plena",
     situacao: "resolvido",
   },
   {
     id: "CH-103",
-    title: "Lentidão no relatório mensal",
-    description: "O relatório de vendas mensal leva mais de 10 minutos para carregar.",
-    customer: "Transportadora Rota Sul",
+    titulo: "Lentidão no relatório mensal",
+    descricao: "O relatório de vendas mensal leva mais de 10 minutos para carregar.",
+    cliente: "Transportadora Rota Sul",
     situacao: "aberto",
   },
   {
     id: "CH-104",
-    title: "Notificações por e-mail não enviadas",
-    description: "Notificações por e-mail falhavam; certificado do servidor SMTP renovado.",
-    customer: "Escola Saber Mais",
+    titulo: "Notificações por e-mail não enviadas",
+    descricao: "Notificações por e-mail falhavam; certificado do servidor SMTP renovado.",
+    cliente: "Escola Saber Mais",
     situacao: "resolvido",
   },
 ]);
@@ -51,9 +51,9 @@ export function listTickets(input: ListTicketsInput): ToolResult<Ticket[]> {
 }
 
 export function getTicket(input: GetTicketInput): ToolResult<Ticket> {
-  const ticket = TICKETS.find((t) => t.id === input.ticket_id);
+  const ticket = TICKETS.find((t) => t.id === input.chamado_id);
   if (!ticket) {
-    return fail("TICKET_NOT_FOUND", `Chamado ${input.ticket_id} não encontrado.`);
+    return fail("TICKET_NOT_FOUND", `Chamado ${input.chamado_id} não encontrado.`);
   }
   return ok({ ...ticket });
 }

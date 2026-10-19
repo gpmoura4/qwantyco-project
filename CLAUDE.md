@@ -9,9 +9,9 @@ Assistente de suporte para a empresa fictícia Aurora. Ele consulta chamados, li
 - Node **24 LTS** (`.nvmrc`, `engines`), npm, TypeScript 5.9 `strict`
 - Next.js 16.4.2 (App Router, `src/`), React 19.3
 - Vitest 5
-- LangGraph JS + LangChain JS **1.x** (modelo, mensagens, tools com Zod, `bindTools`). Entram nos passos 2–3.
+- `@langchain/core` 1.2, `@langchain/langgraph` 1.5 (`StateSchema`, `MemorySaver`), `@langchain/ollama` 1.3, Zod 4. Modelo falso: `fakeModel()` de `@langchain/core/testing`.
 - LangSmith (tracing + evaluation)
-- LLM local via Ollama (modelo escolhido no Passo 3)
+- LLM local via Ollama (`ChatOllama`, `temperature: 0`); modelo em `OLLAMA_MODEL` (ver D25)
 - APIs atuais apenas. Proibido: `AgentExecutor`, `LLMChain`, `@langchain/classic`. Em dúvida, consultar docs.langchain.com antes de escrever código.
 - Next.js: ler o guia da versão instalada em `node_modules/next/dist/docs/` (ver `AGENTS.md`).
 
@@ -35,6 +35,7 @@ npm run build      # build de produção (inclui typecheck)
 npm test           # testes offline (Vitest, modelo falso, sem rede)
 npm run test:watch # testes em modo watch
 npm run lint       # ESLint
+npm run smoke      # smoke manual com o modelo real (Ollama); não faz parte do npm test
 # npm run eval     # avaliação no LangSmith — criado no Passo 9
 ```
 
@@ -44,6 +45,7 @@ src/app/     Next.js: UI e rotas de API finas, que só chamam o core
 src/agent/   Core do agente (domínio, mocks, tools, grafo, modelo). NUNCA importa `next`
 evals/       Dataset, avaliador por código e runner do LangSmith (Passo 9)
 tests/       Testes offline (Vitest). Usam modelo falso e passam pelo mesmo grafo/executor
+scripts/     Scripts manuais com modelo real (smoke), rodados com tsx
 docs/        requisitos.md, plano.md, decisoes.md; references/ fica fora do git
 ```
 `src/agent/` e `evals/` são criados nos passos em que forem necessários.
@@ -60,7 +62,9 @@ docs/        requisitos.md, plano.md, decisoes.md; references/ fica fora do git
 
 ## Convenções de código
 - **Idioma:** código, identificadores, comentários e commits em inglês. Texto ao usuário (UI, respostas, erros), system prompt e docs em português.
-- **Nomes obrigatórios do PDF:** tool `listar_chamados`, argumento `situacao`, valor `"aberto"`. As outras tools têm nome em inglês.
+- **Nomes obrigatórios do PDF:** tool `listar_chamados`, argumento `situacao`, valor `"aberto"`. As outras tools têm nome em inglês (`get_ticket`, `register_escalation`).
+- **Campos de domínio em PT** (D20): chamado `{ id, titulo, descricao, cliente, situacao }`, escalonamento `{ id, chamado_id, resumo, justificativa }`, e os argumentos das tools. Envelope técnico (`ok`, `data`, `error`, `code`, `message`) e códigos de erro ficam em EN.
+- O escalonamento **não altera** o chamado: fica numa coleção separada (D19).
 - TypeScript `strict`. Contratos de entrada e saída das tools validados com Zod.
 - Imports do core via alias `@/` (ex.: `@/agent/...`).
 - Testes em `tests/**/*.test.ts`, offline, determinísticos, sem rede e sem LLM real. Falhas simuladas são injetáveis, não aleatórias.
@@ -72,6 +76,7 @@ Ao fim de **cada passo**, atualizar:
 - `docs/plano.md` (status do passo)
 - `docs/requisitos.md` (status dos IDs atendidos)
 - `docs/decisoes.md` (novas decisões e propostas em aberto resolvidas)
+- `docs/fluxo.md` (diagramas Mermaid de quem chama quem; refletir o código real, nunca o planejado)
 
 ## Git: quando commitar e fazer push
 - **Commit** ao fim de cada passo, somente após o OK do Guilherme. O Claude nunca commita sem pedir.

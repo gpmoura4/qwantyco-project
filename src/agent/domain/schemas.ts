@@ -1,32 +1,34 @@
 import { z } from "zod";
 
 // Contracts shared by the domain functions and (from step 3) the LangChain tools.
-// Field descriptions are in Portuguese because the model reads them (D06/S3).
+// Domain field names are in Portuguese, consistent with the mandatory `situacao` (D20).
+// Field descriptions are in Portuguese because the model reads them (D15).
 
 export const SituacaoSchema = z.enum(["aberto", "resolvido"]);
 export type Situacao = z.infer<typeof SituacaoSchema>;
 
 // Normalizes " ch-101 " to "CH-101" before checking the format.
-const TicketIdSchema = z
+const ChamadoIdSchema = z
   .string()
   .trim()
   .toUpperCase()
   .regex(/^CH-\d+$/, "Identificador deve ter o formato CH-<número>, ex.: CH-101.");
 
 export const TicketSchema = z.object({
-  id: TicketIdSchema,
-  title: z.string().min(1),
-  description: z.string().min(1),
-  customer: z.string().min(1),
+  id: ChamadoIdSchema,
+  titulo: z.string().min(1),
+  descricao: z.string().min(1),
+  cliente: z.string().min(1),
   situacao: SituacaoSchema,
 });
 export type Ticket = z.infer<typeof TicketSchema>;
 
+// Escalations live in their own collection; registering one never changes the ticket (D19).
 export const EscalationSchema = z.object({
   id: z.string().regex(/^ESC-\d{3,}$/),
-  ticket_id: TicketIdSchema,
-  summary: z.string().min(1),
-  justification: z.string().min(1),
+  chamado_id: ChamadoIdSchema,
+  resumo: z.string().min(1),
+  justificativa: z.string().min(1),
 });
 export type Escalation = z.infer<typeof EscalationSchema>;
 
@@ -40,19 +42,19 @@ export const ListTicketsInputSchema = z.object({
 export type ListTicketsInput = z.infer<typeof ListTicketsInputSchema>;
 
 export const GetTicketInputSchema = z.object({
-  ticket_id: TicketIdSchema.describe("Identificador do chamado, ex.: CH-101."),
+  chamado_id: ChamadoIdSchema.describe("Identificador do chamado, ex.: CH-101."),
 });
 export type GetTicketInput = z.infer<typeof GetTicketInputSchema>;
 
 export const RegisterEscalationInputSchema = z.object({
-  ticket_id: TicketIdSchema.describe("Identificador do chamado a escalonar, ex.: CH-101."),
-  summary: z
+  chamado_id: ChamadoIdSchema.describe("Identificador do chamado a escalonar, ex.: CH-101."),
+  resumo: z
     .string()
     .trim()
     .min(1)
     .max(500)
     .describe("Resumo do problema do chamado, baseado nos dados consultados."),
-  justification: z
+  justificativa: z
     .string()
     .trim()
     .min(1)
@@ -61,9 +63,16 @@ export const RegisterEscalationInputSchema = z.object({
 });
 export type RegisterEscalationInput = z.infer<typeof RegisterEscalationInputSchema>;
 
-// --- Tool result: business errors are returned as data, never thrown (S5) ---
+// --- Tool result: business errors are returned as data, never thrown (D17) ---
 
-export type ErrorCode = "TICKET_NOT_FOUND" | "TICKET_NOT_OPEN" | "ALREADY_ESCALATED";
+export type ErrorCode =
+  // business rules (domain functions)
+  | "TICKET_NOT_FOUND"
+  | "TICKET_NOT_OPEN"
+  | "ALREADY_ESCALATED"
+  // executor checks (tool call rejected before running)
+  | "UNKNOWN_TOOL"
+  | "INVALID_ARGS";
 
 export type ToolResult<T> =
   | { ok: true; data: T }

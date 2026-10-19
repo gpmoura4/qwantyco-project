@@ -138,7 +138,7 @@ Formato: data · contexto · opções · decisão · motivo (e risco, quando a d
 ## D14 — Nomes das tools e dos argumentos
 - **Data:** 2026-10-19
 - **Opções:** `get_ticket` + `register_escalation` · `get_ticket` + `escalate_ticket`.
-- **Decisão:** `listar_chamados(situacao)` (obrigatório pelo PDF), `get_ticket(ticket_id)` e `register_escalation(ticket_id, summary, justification)`. Tudo que o modelo vê fica em snake_case.
+- **Decisão:** `listar_chamados(situacao)` (obrigatório pelo PDF), `get_ticket(chamado_id)` e `register_escalation(chamado_id, resumo, justificativa)`. Tudo que o modelo vê fica em snake_case. (Argumentos em PT desde a D20.)
 - **Motivo:** `register_escalation` traduz literalmente "Registrar escalonamento" do PDF e deixa explícito que é uma operação de escrita.
 
 ## D15 — Descrições das tools e dos campos em português
@@ -151,9 +151,9 @@ Formato: data · contexto · opções · decisão · motivo (e risco, quando a d
 - **Data:** 2026-10-19
 - **Opções:** campo de estado `situacao` · `status`.
 - **Decisão:**
-  - Chamado = `{ id, title, description, customer, situacao }`, com `situacao` no enum fechado `"aberto" | "resolvido"`.
+  - Chamado = `{ id, titulo, descricao, cliente, situacao }` (campos em PT desde a D20), com `situacao` no enum fechado `"aberto" | "resolvido"`.
   - Massa: CH-101 e CH-103 abertos, CH-102 e CH-104 resolvidos. **Nenhum outro aberto.**
-  - O `ticket_id` é normalizado (`" ch-101 "` vira `"CH-101"`) e validado no formato `CH-<número>`.
+  - O `chamado_id` é normalizado (`" ch-101 "` vira `"CH-101"`) e validado no formato `CH-<número>`.
   - Os mocks são validados pelo schema no carregamento, e as funções devolvem cópias (ninguém altera os mocks).
 - **Motivo:** o campo de estado tem o mesmo nome do filtro, então o modelo não precisa mapear `situacao` para `status`. Um terceiro chamado aberto quebraria o critério "sem registros extras" do caso obrigatório. (Resolve P1 e P2.)
 
@@ -171,8 +171,79 @@ Formato: data · contexto · opções · decisão · motivo (e risco, quando a d
   - A idempotência por id da proposta (camada 1) fica para o Passo 4.
 - **Motivo:**
   - Cada teste cria o seu store, sem contaminação entre testes.
-  - **Sobre banco de dados (pergunta do Guilherme):** não é necessário, porque o PDF pede registro "simulado", aceita "dados locais" e diz que "checkpoint em memória é suficiente". As regras avaliadas (bloqueio, idempotência, não confirmar o que não ocorreu) ficam na função de registro e funcionam igual com memória ou com banco. O store tem uma interface pequena (`add`, `findByTicketId`, `list`), então trocar por SQLite ou Postgres em produção mexeria só nessa implementação.
+  
 - **Trade-off aceito:** reiniciar o servidor apaga os escalonamentos. Vai para as limitações do README.
+
+## D19 — O escalonamento não muda a situação do chamado
+- **Data:** 2026-10-19
+- **Contexto:** depois de escalonado, o chamado deveria mudar de situação (por exemplo, para "escalonado")?
+- **Opções:** (a) mudar a `situacao` do chamado · (b) manter o chamado intacto e guardar os escalonamentos numa coleção separada, ligada pelo `chamado_id`.
+- **Decisão:** (b).
+- **Motivo:**
+  - Os chamados são a massa mockada de leitura, e o escalonamento é um registro novo e independente, como "registrar" sugere no PDF.
+  - Mudar a situação teria dois efeitos ruins:
+    - criaria um terceiro valor no enum de `situacao`;
+    - faria o CH-101 sumir de `listar_chamados({situacao:"aberto"})` depois de escalonado, e o caso obrigatório da avaliação ("CH-101 e CH-103") passaria a depender da ordem em que os testes rodam.
+  - "Já foi escalonado?" é respondido consultando a coleção de escalonamentos (`findByTicketId`), não o chamado.
+- **Verificação:** teste "keeps the ticket untouched" em `tests/domain.test.ts`.
+
+## D20 — Campos de domínio em português
+- **Data:** 2026-10-19
+- **Contexto:** `situacao` é obrigatório pelo PDF. Com os outros campos em inglês, o mesmo objeto misturava idiomas (`{ title, customer, situacao }`).
+- **Opções:** (a) campos de domínio em EN, com exceção de `situacao` · (b) todos os campos de domínio em PT.
+- **Decisão:** (b). Ajusta a D06, a D14 e a D16.
+  - **Chamado:** `{ id, titulo, descricao, cliente, situacao }`.
+  - **Escalonamento:** `{ id, chamado_id, resumo, justificativa }`.
+  - **Argumentos das tools:** `get_ticket(chamado_id)` e `register_escalation(chamado_id, resumo, justificativa)`.
+  - **Continuam em EN:** nomes das tools (`get_ticket`, `register_escalation`, D14), identificadores de código (funções, tipos, variáveis), o envelope técnico do resultado (`ok`, `data`, `error`, `code`, `message`) e os códigos de erro (`TICKET_NOT_FOUND` etc.).
+- **Motivo:** coerência com o campo obrigatório `situacao` e com o vocabulário do PDF ("chamado, resumo e justificativa"). O modelo vê dados e argumentos no mesmo idioma das mensagens do usuário.
+
+## D21 — Dependências do grafo
+- **Data:** 2026-10-19
+- **Decisão:**
+  - **Runtime:** `@langchain/core` 1.2.18, `@langchain/langgraph` 1.5.1 e `@langchain/ollama` 1.3.0.
+  - **Dev:** `tsx` 4.23, antecipado do Passo 9a para rodar `scripts/smoke.ts`. Ele entende o alias `@/`, que o type-stripping nativo do Node não aceita.
+  - **Ajuste depois da aprovação:** o `fakeModel()` que a documentação mostra importado de `langchain` é só um re-export de `@langchain/core/testing`. Por isso o pacote `langchain` foi **desinstalado**: é o mesmo modelo falso, com uma dependência a menos.
+- **Motivo:** o mínimo da stack definida (D01). Uma única cópia do `@langchain/core` na árvore (verificado com `npm ls`).
+
+## D22 — Estado do grafo com `StateSchema`
+- **Data:** 2026-10-19
+- **Opções:** (a) `StateSchema` + `MessagesValue` · (b) `Annotation.Root` / `MessagesAnnotation`.
+- **Decisão:** (a), começando só com `messages`. Os campos da proposta (Passo 4) e do orçamento de execução (Passo 5) entram quando forem necessários.
+- **Motivo:** é a forma atual da documentação do LangGraph JS 1.x (consultada em 2026-10-19), usa Zod e o `MessagesValue` já traz o reducer que acrescenta mensagens. `Annotation.Root` ainda funciona, mas a documentação atual não o mostra mais.
+
+## D23 — Executor próprio em vez de `ToolNode` ou `createAgent`
+- **Data:** 2026-10-19
+- **Opções:** (a) `StateGraph` + nó executor próprio · (b) `StateGraph` + `ToolNode` pronto · (c) `createAgent` com middlewares.
+- **Decisão:** (a). O grafo é `callModel → (executeTools → callModel)* → END`. Para cada tool call, `executeToolCall` (em `src/agent/executor.ts`):
+  1. confere a **allowlist** (nome desconhecido → `UNKNOWN_TOOL`);
+  2. valida os argumentos com o **schema Zod** da tool (inválido → `INVALID_ARGS`, nada é executado);
+  3. executa via `tool.invoke()`, que aparece como run de tool no LangSmith;
+  4. devolve um `ToolMessage` com o `ToolResult` em JSON e `status` `success` ou `error`.
+- **Motivo:** cada regra fica visível num arquivo só, que é a frase do PDF "o executor valida e executa a função mockada". Aprovação (Passo 4) e retry/timeout (Passo 5) entram no mesmo nó. O `ToolNode` deixaria allowlist e validação implícitas, e o `createAgent` esconderia o grafo.
+- **Segurança incremental:** no Passo 3 a allowlist tem só `listar_chamados` e `get_ticket`. O `register_escalation` só entra no Passo 4, junto com o `interrupt`, então nunca existiu um caminho em que o registro rode sem aprovação (há um teste que prova isso).
+
+## D24 — Modelo injetável e modelo falso nos testes
+- **Data:** 2026-10-19
+- **Decisão:**
+  - `buildGraph({ model, checkpointer })`: o app e o smoke passam o `ChatOllama` (`src/agent/model.ts`, configurado só por variável de ambiente, `temperature: 0`), e os testes passam o `fakeModel()` de `@langchain/core/testing`.
+  - O `escalationStore` só entra no `buildGraph` no Passo 4, quando houver tool de escrita.
+  - O checkpointer é o `MemorySaver`, com uma `thread_id` por sessão.
+- **Opções do modelo falso:** `fakeModel()` (recomendado pela documentação, fila de respostas e registro das chamadas em `model.calls`) · `FakeStreamingChatModel` (semântica pouco clara) · fake escrito à mão (mais código).
+- **Motivo:** o PDF exige que os testes offline passem "pelo mesmo grafo e executor". O `model.calls` permite provar o T07: a sessão B não recebeu as mensagens da sessão A.
+
+## D25 — Escolha do modelo local: smoke comparativo
+- **Data:** 2026-10-19
+- **Contexto:** `npm run smoke` roda 4 conversas (listar abertos, consultar o CH-102, consultar o CH-999, consultar o CH-101 + follow-up) com cada modelo já instalado.
+- **Resultado:**
+
+  | Modelo (Ollama) | Tool calls | Fidelidade | Observação |
+  |---|---|---|---|
+  | `qwen2.5:7b-instruct-q4_K_M` | 5/5 corretas | fiel em todos | objetivo; usou o contexto no follow-up |
+  | `llama3.1:8b-instruct-q4_K_M` | 5/5 corretas | especulou no CH-999 ("pode ter sido cancelado…") | erros de português |
+  | `gemma2:9b-instruct-q4_K_M` | — | — | o Ollama retorna "does not support tools" |
+- **Decisão:** `qwen2.5:7b-instruct-q4_K_M`, configurado em `OLLAMA_MODEL`.
+- **Motivo:** único modelo fiel ao retorno das tools nos 5 turnos; o llama3.1 especulou num chamado inexistente, o que vai contra a regra "nunca inventar dados".
 
 ---
 

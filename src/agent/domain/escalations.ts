@@ -15,15 +15,15 @@ export function createEscalationStore(): EscalationStore {
     add(input) {
       const record: Escalation = {
         id: `ESC-${String(records.length + 1).padStart(3, "0")}`,
-        ticket_id: input.ticket_id,
-        summary: input.summary,
-        justification: input.justification,
+        chamado_id: input.chamado_id,
+        resumo: input.resumo,
+        justificativa: input.justificativa,
       };
       records.push(record);
       return { ...record };
     },
     findByTicketId(ticketId) {
-      const record = records.find((r) => r.ticket_id === ticketId);
+      const record = records.find((r) => r.chamado_id === ticketId);
       return record && { ...record };
     },
     list() {
@@ -38,7 +38,7 @@ export function registerEscalation(
   store: EscalationStore,
   input: RegisterEscalationInput,
 ): ToolResult<Escalation> {
-  const found = getTicket({ ticket_id: input.ticket_id });
+  const found = getTicket({ chamado_id: input.chamado_id });
   if (!found.ok) return found;
 
   const ticket = found.data;

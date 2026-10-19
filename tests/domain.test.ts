@@ -10,9 +10,9 @@ import { getTicket, listTickets } from "@/agent/domain/tickets";
 const ids = (tickets: { id: string }[]) => tickets.map((t) => t.id);
 
 const validEscalation = {
-  ticket_id: "CH-101",
-  summary: "Erro 500 ao emitir nota fiscal desde ontem.",
-  justification: "Cliente impedido de faturar.",
+  chamado_id: "CH-101",
+  resumo: "Erro 500 ao emitir nota fiscal desde ontem.",
+  justificativa: "Cliente impedido de faturar.",
 };
 
 describe("listar_chamados (listTickets)", () => {
@@ -42,12 +42,12 @@ describe("listar_chamados (listTickets)", () => {
 
 describe("getTicket", () => {
   it("returns the ticket for a known id", () => {
-    const result = getTicket({ ticket_id: "CH-102" });
+    const result = getTicket({ chamado_id: "CH-102" });
     expect(result).toMatchObject({ ok: true, data: { id: "CH-102", situacao: "resolvido" } });
   });
 
   it("returns TICKET_NOT_FOUND for an unknown id instead of inventing data", () => {
-    const result = getTicket({ ticket_id: "CH-999" });
+    const result = getTicket({ chamado_id: "CH-999" });
     expect(result).toMatchObject({ ok: false, error: { code: "TICKET_NOT_FOUND" } });
   });
 });
@@ -60,18 +60,18 @@ describe("input contracts (Zod)", () => {
   });
 
   it("normalizes the ticket id and rejects malformed ones", () => {
-    expect(GetTicketInputSchema.parse({ ticket_id: " ch-101 " })).toEqual({ ticket_id: "CH-101" });
-    expect(GetTicketInputSchema.safeParse({ ticket_id: "101" }).success).toBe(false);
+    expect(GetTicketInputSchema.parse({ chamado_id: " ch-101 " })).toEqual({ chamado_id: "CH-101" });
+    expect(GetTicketInputSchema.safeParse({ chamado_id: "101" }).success).toBe(false);
     expect(GetTicketInputSchema.safeParse({}).success).toBe(false);
   });
 
-  it("requires non-empty summary and justification", () => {
+  it("requires non-empty resumo and justificativa", () => {
     expect(RegisterEscalationInputSchema.safeParse(validEscalation).success).toBe(true);
     expect(
-      RegisterEscalationInputSchema.safeParse({ ...validEscalation, summary: "   " }).success,
+      RegisterEscalationInputSchema.safeParse({ ...validEscalation, resumo: "   " }).success,
     ).toBe(false);
     expect(
-      RegisterEscalationInputSchema.safeParse({ ticket_id: "CH-101", summary: "x" }).success,
+      RegisterEscalationInputSchema.safeParse({ chamado_id: "CH-101", resumo: "x" }).success,
     ).toBe(false);
   });
 });
@@ -81,13 +81,13 @@ describe("registerEscalation (business guards)", () => {
     const store = createEscalationStore();
     const result = registerEscalation(store, validEscalation);
 
-    expect(result).toMatchObject({ ok: true, data: { id: "ESC-001", ticket_id: "CH-101" } });
+    expect(result).toMatchObject({ ok: true, data: { id: "ESC-001", chamado_id: "CH-101" } });
     expect(store.list()).toHaveLength(1);
   });
 
   it("blocks a resolved ticket (CH-102) and writes nothing", () => {
     const store = createEscalationStore();
-    const result = registerEscalation(store, { ...validEscalation, ticket_id: "CH-102" });
+    const result = registerEscalation(store, { ...validEscalation, chamado_id: "CH-102" });
 
     expect(result).toMatchObject({ ok: false, error: { code: "TICKET_NOT_OPEN" } });
     expect(store.list()).toHaveLength(0);
@@ -95,7 +95,7 @@ describe("registerEscalation (business guards)", () => {
 
   it("blocks an unknown ticket and writes nothing", () => {
     const store = createEscalationStore();
-    const result = registerEscalation(store, { ...validEscalation, ticket_id: "CH-999" });
+    const result = registerEscalation(store, { ...validEscalation, chamado_id: "CH-999" });
 
     expect(result).toMatchObject({ ok: false, error: { code: "TICKET_NOT_FOUND" } });
     expect(store.list()).toHaveLength(0);
@@ -106,7 +106,7 @@ describe("registerEscalation (business guards)", () => {
     registerEscalation(store, validEscalation);
     const result = registerEscalation(store, {
       ...validEscalation,
-      summary: "Cliente não consegue emitir notas fiscais.",
+      resumo: "Cliente não consegue emitir notas fiscais.",
     });
 
     expect(result).toMatchObject({
@@ -114,6 +114,17 @@ describe("registerEscalation (business guards)", () => {
       error: { code: "ALREADY_ESCALATED", message: expect.stringContaining("ESC-001") },
     });
     expect(store.list()).toHaveLength(1);
+  });
+
+  it("keeps the ticket untouched: escalations live in a separate collection (D19)", () => {
+    const store = createEscalationStore();
+    registerEscalation(store, validEscalation);
+
+    expect(getTicket({ chamado_id: "CH-101" })).toMatchObject({
+      ok: true,
+      data: { situacao: "aberto" },
+    });
+    expect(store.findByTicketId("CH-101")).toMatchObject({ id: "ESC-001" });
   });
 
   it("keeps stores isolated from each other", () => {
