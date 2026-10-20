@@ -318,13 +318,57 @@ Formato: data · contexto · opções · decisão · motivo (e risco, quando a d
   - **Saída do modelo:** tool calls com JSON malformado (`invalid_tool_calls` do LangChain) recebem `INVALID_ARGS` em vez de serem ignoradas, e o `routeAfterModel` também roteia nesse caso.
 - **Motivo:** o PDF pede tratar "entrada ou saída inválida" e "não executar ferramenta indevida". Modelos locais às vezes emitem JSON quebrado.
 
+## D33 — API: duas rotas finas e contrato de resposta
+- **Data:** 2026-10-20
+- **Contexto:** guia de Route Handlers do Next 16.4 instalado (`node_modules/next/dist/docs/`). Um `route.ts` exporta funções `POST(request: Request): Response`; o runtime padrão é Node.js (Edge está deprecated) e `POST` nunca é cacheado.
+- **Opções:** (a) duas rotas, uma para mensagem e outra para decisão · (b) uma rota com campo `action`.
+- **Decisão:** (a).
+  - `POST /api/chat` recebe `{ sessionId, message }`.
+  - `POST /api/chat/decision` recebe `{ sessionId, proposta_id, decisao }`.
+  - As rotas só validam o corpo (Zod, `parseBody`), chamam o core (`src/agent/chat.ts`: `sendMessage` e `sendDecision`) e traduzem o resultado em HTTP (`toResponse`). Nenhuma regra de negócio fica nelas.
+  - Respostas:
+    - 200 com `{ kind: "reply", reply }` ou `{ kind: "approval_required", proposal, reply }`;
+    - 400 `INVALID_REQUEST`;
+    - 409 `PROPOSAL_PENDING`, `NO_PENDING_PROPOSAL` ou `PROPOSAL_MISMATCH`;
+    - 503 `EXECUTION_LIMIT` ou `EXECUTION_FAILED`.
+- **Motivo:** bate 1:1 com o PDF ("mensagem" e "decisão de aprovação") e com o core. Os handlers são funções comuns, testadas no Vitest sem subir servidor (`tests/api.test.ts`).
+
+## D34 — Sessão identificada por UUID gerado no cliente
+- **Data:** 2026-10-20
+- **Opções:** (a) o cliente gera um UUID, validado com Zod, que vira o `thread_id` · (b) cookie httpOnly gerado pelo servidor.
+- **Decisão:** (a).
+- **Motivo:** simples, e "Nova conversa" na UI é só gerar outro UUID, o que facilita demonstrar sessões separadas. Um UUID v4 não é adivinhável.
+- **Limitação:** o servidor confia no id recebido. Em produção, a sessão viria da autenticação. Vai para as limitações do README.
+
+## D35 — Runtime único em `globalThis`
+- **Data:** 2026-10-20
+- **Opções:** (a) `getRuntime()` com o grafo, o store e os limites guardados em `globalThis` · (b) singleton simples de módulo.
+- **Decisão:** (a), em `src/agent/runtime.ts`.
+  - `createRuntime({ model, faults, limits })` monta o grafo (com `MemorySaver`) e o store.
+  - `getRuntime()` cria uma vez com `ChatOllama` e as `faults` do `.env`.
+  - `setRuntimeForTests()` permite aos testes de rota usar um `fakeModel`.
+- **Motivo:** o HMR do `next dev` reavalia os módulos a cada edição. Com um singleton simples, isso apagaria todas as sessões e escalonamentos. Resolve o P7.
+
+## D36 — Mensagem nova com proposta pendente é recusada (409)
+- **Data:** 2026-10-20
+- **Opções:** (a) recusar com `409 PROPOSAL_PENDING` · (b) rejeitar automaticamente a proposta e processar a mensagem.
+- **Decisão:** (a). A checagem fica no `sendMessage`, antes de invocar o grafo.
+- **Motivo:** nenhuma decisão humana é tomada por inferência do sistema, e nada fica pendurado no checkpoint. A UI também vai desabilitar o envio enquanto houver proposta.
+- **Verificação com o modelo real (`next dev` + `curl`):**
+  - listar → 200 com CH-101 e CH-103;
+  - escalonar o CH-101 → 200 `approval_required` com a proposta exata;
+  - mensagem com proposta pendente → 409;
+  - outra sessão aprovando → 409 `NO_PENDING_PROPOSAL`;
+  - aprovar → `ESC-001`;
+  - aprovar de novo → "já registrado";
+  - corpo inválido → 400.
+
 ---
 
 ## Propostas em aberto (confirmar no passo indicado)
 
 | # | Proposta | Passo |
 |---|----------|-------|
-| P7 | Checkpointer e registros em memória ancorados em `globalThis`, para sobreviver ao HMR do `next dev`. | 6 |
 | P8 | Garantir o envio dos traces antes de a resposta da rota Next terminar (confirmar na documentação do LangSmith). | 8 |
 | P9 | Como o runner da avaliação trata um `interrupt` (casos da avaliação devem ficar em consulta). | 9a |
 

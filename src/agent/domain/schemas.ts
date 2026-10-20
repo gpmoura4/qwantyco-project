@@ -100,7 +100,10 @@ export type ErrorCode =
   // failures and limits
   | "INVALID_OUTPUT"
   | "EXECUTION_LIMIT"
-  | "EXECUTION_FAILED";
+  | "EXECUTION_FAILED"
+  // chat API
+  | "INVALID_REQUEST"
+  | "PROPOSAL_PENDING";
 
 export type ToolResult<T> =
   | { ok: true; data: T }

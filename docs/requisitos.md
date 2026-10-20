@@ -19,7 +19,7 @@ Status: ⬜ pendente · 🟨 parcial · ✅ atendido
 | R09 | Orquestração em LangGraph, estado tipado e contratos validados. | 3 | ✅ |
 | R10 | Contexto mantido entre requisições; sessões diferentes separadas. Checkpoint em memória basta. | 3 | ✅ |
 | R11 | Interrupção e retomada do LangGraph; UI Next.js mostra a proposta exata com aprovar/rejeitar. | 4, 6, 7 | 🟨 |
-| R12 | Aprovação validada no backend e vinculada à proposta; repeti-la não duplica o registro. | 4, 6 | 🟨 |
+| R12 | Aprovação validada no backend e vinculada à proposta; repeti-la não duplica o registro. | 4, 6 | ✅ |
 | R13 | Falhas simuladas nas tools; tratar chamado inexistente, entrada/saída inválida e ferramenta desconhecida. | 3, 5 | ✅ |
 | R14 | Timeout, tentativas limitadas e limite total de execução ativa (espera humana não conta). Não depender só do prompt para bloquear ações. | 5 | ✅ |
 | R15 | LangSmith obrigatório: chamadas ao modelo, nós, tools, argumentos, resultados, erros, aprovação/retomada; correlação por sessão e execução; sem segredos. | 8 | ⬜ |

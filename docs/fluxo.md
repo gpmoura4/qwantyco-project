@@ -3,20 +3,52 @@
 Mostra **quem chama quem** entre os arquivos quando o assistente roda. Atualizado ao fim de cada passo.
 Os diagramas são Mermaid (renderizam no GitHub e no preview de Markdown do VS Code).
 
-**Estado atual:** Passo 5. O grafo consulta chamados, prepara escalonamentos com aprovação humana e roda com retry, timeout e limite de execução. A API Next.js entra no Passo 6.
+**Estado atual:** Passo 6. A API Next.js (`/api/chat` e `/api/chat/decision`) expõe o agente: consulta, escalonamento com aprovação humana, retry, timeout e limites. A UI de chat entra no Passo 7.
 
 ---
 
-## 1. Mapa de arquivos (quem importa/chama quem)
+## 1. Visão em camadas (caminho de uma requisição)
+
+```mermaid
+flowchart TD
+    C["Navegador / curl"] -->|"HTTP POST"| R["Rotas Next.js<br/>api/chat · api/chat/decision<br/>(Zod → core → HTTP)"]
+    R -.->|getRuntime| RT["runtime.ts<br/>grafo + store + checkpointer<br/>(um por processo, globalThis)"]
+    R --> CH["chat.ts<br/>sendMessage · sendDecision"]
+    CH --> AP["approval.ts<br/>decideProposal<br/>(valida a decisão)"]
+    CH --> RUN["run.ts · runAgent<br/>limite de passos e tempo"]
+    AP --> RUN
+    RUN --> G["graph.ts (LangGraph)<br/>callModel · executeTools · humanApproval"]
+    G --> M["Modelo<br/>ChatOllama (qwen2.5) ou fakeModel"]
+    G --> X["executor.ts<br/>allowlist · Zod · regras · saída"]
+    X --> T["tools.ts<br/>listar_chamados · get_ticket"]
+    T --> D["domain/<br/>tickets · escalations · schemas"]
+    G -->|"humanApproval:<br/>registerEscalation"| D
+    X -->|"checkEscalationAllowed<br/>(proposta)"| D
+```
+
+Leitura de cima para baixo: cada camada só conhece a de baixo. As regras de negócio ficam em `domain/` e no executor, nunca nas rotas nem no prompt.
+
+---
+
+## 2. Mapa detalhado de arquivos (quem importa/chama quem)
 
 ```mermaid
 flowchart TD
     subgraph Entrada["Pontos de entrada"]
+        CLIENT["Navegador / curl<br/>(Passo 7: UI)"]
         SMOKE["scripts/smoke.ts<br/>(modelo real)"]
         TEST["tests/*.test.ts<br/>(fakeModel)"]
     end
 
+    subgraph Next["src/app/api/chat — Next.js (rotas finas)"]
+        RCHAT["route.ts<br/>POST /api/chat"]
+        RDEC["decision/route.ts<br/>POST /api/chat/decision"]
+        HTTPH["http.ts<br/>parseBody() · toResponse()"]
+    end
+
     subgraph Core["src/agent — core (nunca importa next)"]
+        RUNTIME["runtime.ts<br/>getRuntime() em globalThis · createRuntime()"]
+        CHAT["chat.ts<br/>sendMessage() · sendDecision() · schemas da API"]
         MODEL["model.ts<br/>createChatModel() → ChatOllama"]
         RUN["run.ts<br/>runAgent() · DEFAULT_LIMITS"]
         APPROVAL["approval.ts<br/>decideProposal() · getPendingProposal() · confirmationText()"]
@@ -35,14 +67,22 @@ flowchart TD
     OLLAMA[("Ollama local<br/>qwen2.5:7b-instruct")]
     SAVER[("MemorySaver<br/>checkpoint por thread_id")]
 
-    SMOKE --> MODEL
-    SMOKE -->|buildGraph| GRAPH
-    SMOKE --> RUN
-    SMOKE --> APPROVAL
-    SMOKE -->|"parseFaults(env)"| FAULTS
-    TEST -->|buildGraph| GRAPH
-    TEST --> RUN
-    TEST --> APPROVAL
+    CLIENT -->|"POST { sessionId, message }"| RCHAT
+    CLIENT -->|"POST { sessionId, proposta_id, decisao }"| RDEC
+    RCHAT --> HTTPH
+    RDEC --> HTTPH
+    RCHAT -->|getRuntime| RUNTIME
+    RDEC -->|getRuntime| RUNTIME
+    RCHAT -->|sendMessage| CHAT
+    RDEC -->|sendDecision| CHAT
+    RUNTIME --> MODEL
+    RUNTIME -->|"buildGraph + MemorySaver"| GRAPH
+    RUNTIME -->|"parseFaults(env)"| FAULTS
+    RUNTIME -->|createEscalationStore| ESC
+    CHAT -->|"runAgent(mensagem)"| RUN
+    CHAT -->|"getPendingProposal · decideProposal"| APPROVAL
+    SMOKE -->|"buildGraph · runAgent · decideProposal"| GRAPH
+    TEST -->|"rotas, createRuntime, buildGraph..."| RUNTIME
     MODEL -.->|HTTP| OLLAMA
     RUN -->|"invoke com recursionLimit + signal"| GRAPH
     APPROVAL -->|getState| GRAPH
@@ -65,15 +105,17 @@ flowchart TD
     EXEC --> SCHEMAS
 ```
 
-> O teste não usa `model.ts`: injeta o `fakeModel()` direto no `buildGraph`. O grafo, o executor e o domínio são os mesmos nos dois casos.
+> As **rotas** só validam o corpo (Zod), chamam `chat.ts` e traduzem o resultado em HTTP. Nenhuma regra de negócio fica nelas.
+>
+> `runtime.ts` guarda **um** grafo, store e checkpointer por processo em `globalThis`, para o hot reload do `next dev` não apagar as sessões. Os testes trocam o modelo por `fakeModel()` com `setRuntimeForTests()`. O grafo, o executor e o domínio são os mesmos.
 >
 > `run.ts` é a porta de entrada de **toda execução**: aplica o limite de passos e de tempo por invocação e converte estouros em erro controlado.
 >
-> `approval.ts` é a porta de entrada da **decisão humana**: no Passo 6, a rota da API vai chamar `decideProposal()` em vez do `smoke.ts`.
+> `approval.ts` é a porta de entrada da **decisão humana**, chamada pela rota de decisão via `chat.ts`.
 
 ---
 
-## 2. O grafo (nós e arestas do LangGraph)
+## 3. O grafo (nós e arestas do LangGraph)
 
 ```mermaid
 flowchart LR
@@ -101,7 +143,7 @@ Por invocação (`runAgent`, D30): no máximo 12 passos e 120 s. A espera humana
 
 ---
 
-## 3. Sequência: consulta simples ("Liste todos os chamados abertos.")
+## 4. Sequência: consulta simples ("Liste todos os chamados abertos.")
 
 ```mermaid
 sequenceDiagram
@@ -143,7 +185,7 @@ Pontos-chave:
 
 ---
 
-## 4. Sequência: escalonamento com aprovação ("Consulte o CH-101 e prepare um escalonamento")
+## 5. Sequência: escalonamento com aprovação ("Consulte o CH-101 e prepare um escalonamento")
 
 São **duas chamadas** ao grafo: a primeira pausa no `interrupt`; a segunda (a decisão humana) retoma do ponto salvo no checkpoint.
 
@@ -151,7 +193,7 @@ São **duas chamadas** ao grafo: a primeira pausa no `interrupt`; a segunda (a d
 sequenceDiagram
     autonumber
     actor U as Usuário
-    participant E as smoke.ts / teste (Passo 6: rota da API)
+    participant E as Rotas /api/chat* + chat.ts
     participant A as approval.ts
     participant G as graph.ts
     participant S as MemorySaver
@@ -159,8 +201,9 @@ sequenceDiagram
     participant X as executor.ts
     participant ES as domain/escalations.ts
 
-    U->>E: "Consulte o CH-101 e prepare um escalonamento"
-    E->>G: runAgent → graph.invoke(HumanMessage, { thread_id })
+    U->>E: POST /api/chat { sessionId, "Consulte o CH-101 e prepare um escalonamento" }
+    E->>E: parseBody (Zod) · sem proposta pendente nesta sessão?
+    E->>G: runAgent → graph.invoke(HumanMessage, { thread_id: sessionId })
     G->>M: callModel
     M-->>G: tool_call get_ticket { chamado_id: "CH-101" }
     G->>X: executeTools → get_ticket executa
@@ -178,12 +221,12 @@ sequenceDiagram
     G-->>E: retorna com a proposta pendente
     E->>A: getPendingProposal(thread_id)
     A-->>E: proposta exata
-    E-->>U: mostra a proposta (aprovar / rejeitar)
+    E-->>U: 200 { kind: "approval_required", proposal, reply }
 
     Note over U,ES: ... tempo de espera humana (não consome o limite de execução) ...
 
-    U->>E: aprovar
-    E->>A: decideProposal({ proposta_id, decisao: "aprovar" })
+    U->>E: POST /api/chat/decision { sessionId, proposta_id, decisao: "aprovar" }
+    E->>A: parseBody (Zod) → decideProposal({ proposta_id, decisao })
     A->>G: getState → proposta pendente?
     A->>A: mesma proposta_id? sim
     A->>G: runAgent(Command({ resume: decisão })) — orçamento novo
@@ -196,14 +239,14 @@ sequenceDiagram
     G->>S: checkpoint final (pendingProposal = null)
     G-->>A: estado final
     A-->>E: "Escalonamento ESC-001 registrado para o chamado CH-101."
-    E-->>U: confirmação
+    E-->>U: 200 { kind: "reply", reply }
 ```
 
 Se a decisão for **rejeitar**, o passo `registerEscalation` não acontece e a mensagem é "Escalonamento rejeitado. Nada foi registrado."
 
 ---
 
-## 5. Sequência: falha transitória, retry e erro controlado
+## 6. Sequência: falha transitória, retry e erro controlado
 
 Exemplo com `SIMULATE_TOOL_FAILURE=listar_chamados:error:2` (cada chamada falha nas 2 primeiras tentativas).
 
@@ -245,7 +288,7 @@ Se as 3 tentativas falharem (`listar_chamados:error:3`), a exceção sai do graf
 
 ---
 
-## 6. Decisões dentro do executor (`executeToolCall`)
+## 7. Decisões dentro do executor (`executeToolCall`)
 
 ```mermaid
 flowchart TD
@@ -270,7 +313,7 @@ flowchart TD
 
 ---
 
-## 7. Barreiras da decisão humana (`decideProposal` → `humanApproval` → store)
+## 8. Barreiras da decisão humana (`decideProposal` → `humanApproval` → store)
 
 ```mermaid
 flowchart TD
@@ -298,3 +341,4 @@ flowchart TD
 | 3 | Grafo `callModel ⇄ executeTools`, executor com allowlist + Zod, tools do LangChain, checkpointer por `thread_id`, entradas `smoke.ts` e testes. |
 | 4 | Nó `humanApproval` com `interrupt`, campo `pendingProposal` no estado, `register_escalation` vira proposta no executor, `approval.ts` (`decideProposal`) valida e retoma, store idempotente por `proposta_id`, confirmação determinística. |
 | 5 | `run.ts` (`runAgent`: limite de passos e tempo por invocação, erro controlado), `faults.ts` (falhas simuladas), `retryPolicy` e `timeout` nativos nos nós, validação de saída das tools (`outputSchema`) e tratamento de `invalid_tool_calls`. |
+| 6 | Rotas `POST /api/chat` e `POST /api/chat/decision` (finas: Zod → core → HTTP), `chat.ts` (`sendMessage` recusa mensagem com proposta pendente, `sendDecision`), `runtime.ts` (runtime único em `globalThis`). |

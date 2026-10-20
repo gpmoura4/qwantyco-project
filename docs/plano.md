@@ -13,7 +13,7 @@ Status: `[ ]` pendente · `[~]` em andamento / aguardando OK · `[x]` concluído
 | 3 | [x] | **Grafo mínimo**: estado tipado, nó do modelo, executor com allowlist + validação de argumentos, checkpointer em memória com `thread_id` por sessão, modelo injetável (fake nos testes). Ao final: escolher o modelo local e rodar um smoke manual com ele | T01, T07, tool desconhecida e args inválidos passando; smoke com modelo real | R08–R10, R13 (parcial) | commit + **push** |
 | 4 | [x] | **Aprovação humana**: proposta (chamado, resumo, justificativa), `interrupt` e retomada, validação da aprovação contra a proposta pendente, idempotência, rejeição sem registro | T02, T03, T04 passando | R02, R11 (backend), R12 | commit |
 | 5 | [x] | **Falhas e limites**: falha transitória com retry limitado, timeout por tool, limite total de execução ativa (sem contar espera humana), erro controlado | T05, T06 passando | R13, R14 | commit + **push** |
-| 6 | [ ] | **Rotas de API Next.js**: mensagem e decisão de aprovação, separação de sessões | Testes das rotas | R11, R12 | commit |
+| 6 | [x] | **Rotas de API Next.js**: mensagem e decisão de aprovação, separação de sessões | Testes das rotas | R11, R12 | commit |
 | 7 | [ ] | **UI de chat**: mostra a proposta exata com aprovar/rejeitar | Fluxo manual no navegador | R11 | commit + **push** |
 | 8 | [ ] | **Tracing LangSmith**: modelo, nós, tools, args, resultados, erros, aprovação/retomada; metadata/tags de sessão e execução; sem segredos | Trace completo visível no LangSmith | R15 | commit |
 | 9a | [ ] | **Dataset + avaliador por código (offline)** | Avaliador aprova resposta correta e reprova "pulou a consulta" e "inventou chamado" | R16–R18 | commit |

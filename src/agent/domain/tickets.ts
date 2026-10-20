@@ -57,3 +57,4 @@ export function getTicket(input: GetTicketInput): ToolResult<Ticket> {
   }
   return ok({ ...ticket });
 }
+
