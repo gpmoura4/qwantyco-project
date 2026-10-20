@@ -2,6 +2,7 @@ import { AIMessage, HumanMessage, ToolMessage, type BaseMessage } from "@langcha
 import { fakeModel } from "@langchain/core/testing";
 import { MemorySaver } from "@langchain/langgraph";
 import { describe, expect, it } from "vitest";
+import { createEscalationStore } from "@/agent/domain/escalations";
 import { buildGraph } from "@/agent/graph";
 
 // Offline tests: a scripted fake model goes through the real graph and executor.
@@ -21,7 +22,7 @@ describe("T01 — query and listing use the real tool result", () => {
     const model = fakeModel()
       .respondWithTools([{ name: "listar_chamados", args: { situacao: "aberto" }, id: "call-1" }])
       .respond(new AIMessage("Chamados abertos: CH-101 e CH-103."));
-    const graph = buildGraph({ model, checkpointer: new MemorySaver() });
+    const graph = buildGraph({ model, checkpointer: new MemorySaver(), escalationStore: createEscalationStore() });
 
     const result = await graph.invoke(ask("Liste todos os chamados abertos."), session("s1"));
 
@@ -41,7 +42,7 @@ describe("T01 — query and listing use the real tool result", () => {
     const model = fakeModel()
       .respondWithTools([{ name: "get_ticket", args: { chamado_id: "ch-101" } }])
       .respond(new AIMessage("O CH-101 está aberto."));
-    const graph = buildGraph({ model, checkpointer: new MemorySaver() });
+    const graph = buildGraph({ model, checkpointer: new MemorySaver(), escalationStore: createEscalationStore() });
 
     const result = await graph.invoke(ask("Consulte o ch-101."), session("s1"));
 
@@ -57,7 +58,7 @@ describe("T01 — query and listing use the real tool result", () => {
     const model = fakeModel()
       .respondWithTools([{ name: "get_ticket", args: { chamado_id: "CH-999" } }])
       .respond(new AIMessage("O chamado CH-999 não foi encontrado."));
-    const graph = buildGraph({ model, checkpointer: new MemorySaver() });
+    const graph = buildGraph({ model, checkpointer: new MemorySaver(), escalationStore: createEscalationStore() });
 
     const result = await graph.invoke(ask("Consulte o CH-999."), session("s1"));
 
@@ -75,28 +76,9 @@ describe("Executor guards — the model is never trusted", () => {
     const model = fakeModel()
       .respondWithTools([{ name: "delete_ticket", args: { chamado_id: "CH-101" } }])
       .respond(new AIMessage("Não posso fazer isso."));
-    const graph = buildGraph({ model, checkpointer: new MemorySaver() });
+    const graph = buildGraph({ model, checkpointer: new MemorySaver(), escalationStore: createEscalationStore() });
 
     const result = await graph.invoke(ask("Apague o CH-101."), session("s1"));
-
-    expect(toolResult(toolMessages(result.messages)[0])).toMatchObject({
-      ok: false,
-      error: { code: "UNKNOWN_TOOL" },
-    });
-  });
-
-  it("rejects register_escalation: it is not enabled before the approval flow (step 4)", async () => {
-    const model = fakeModel()
-      .respondWithTools([
-        {
-          name: "register_escalation",
-          args: { chamado_id: "CH-101", resumo: "x", justificativa: "y" },
-        },
-      ])
-      .respond(new AIMessage("Não consigo registrar escalonamentos."));
-    const graph = buildGraph({ model, checkpointer: new MemorySaver() });
-
-    const result = await graph.invoke(ask("Escalone o CH-101."), session("s1"));
 
     expect(toolResult(toolMessages(result.messages)[0])).toMatchObject({
       ok: false,
@@ -111,7 +93,7 @@ describe("Executor guards — the model is never trusted", () => {
         { name: "get_ticket", args: { id: "CH-101" } },
       ])
       .respond(new AIMessage("Argumentos inválidos."));
-    const graph = buildGraph({ model, checkpointer: new MemorySaver() });
+    const graph = buildGraph({ model, checkpointer: new MemorySaver(), escalationStore: createEscalationStore() });
 
     const result = await graph.invoke(ask("Liste os fechados e o CH-101."), session("s1"));
 
@@ -129,7 +111,7 @@ describe("T07 — context and sessions", () => {
       .respond(new AIMessage("Olá, Padaria Pão Dourado!"))
       .respond(new AIMessage("Sua empresa é a Padaria Pão Dourado."))
       .respond(new AIMessage("Não sei o nome da sua empresa."));
-    const graph = buildGraph({ model, checkpointer: new MemorySaver() });
+    const graph = buildGraph({ model, checkpointer: new MemorySaver(), escalationStore: createEscalationStore() });
 
     await graph.invoke(ask("Sou da Padaria Pão Dourado."), session("A"));
     await graph.invoke(ask("Qual é a minha empresa?"), session("A"));

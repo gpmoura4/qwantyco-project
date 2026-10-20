@@ -1,23 +1,25 @@
-import { fail, ok, type Escalation, type RegisterEscalationInput, type ToolResult } from "./schemas";
+import { fail, ok, type Escalation, type Proposal, type Ticket, type ToolResult } from "./schemas";
 import { getTicket } from "./tickets";
 
 // In-memory record of escalations (simulated, as the PDF allows). Injected into
-// the functions so each test gets its own isolated store (S6).
+// the functions so each test gets its own isolated store (D18).
 export type EscalationStore = {
-  add(input: RegisterEscalationInput): Escalation;
+  add(proposal: Proposal): Escalation;
   findByTicketId(ticketId: string): Escalation | undefined;
+  findByProposalId(proposalId: string): Escalation | undefined;
   list(): Escalation[];
 };
 
 export function createEscalationStore(): EscalationStore {
   const records: Escalation[] = [];
   return {
-    add(input) {
+    add(proposal) {
       const record: Escalation = {
         id: `ESC-${String(records.length + 1).padStart(3, "0")}`,
-        chamado_id: input.chamado_id,
-        resumo: input.resumo,
-        justificativa: input.justificativa,
+        proposta_id: proposal.id,
+        chamado_id: proposal.chamado_id,
+        resumo: proposal.resumo,
+        justificativa: proposal.justificativa,
       };
       records.push(record);
       return { ...record };
@@ -26,19 +28,23 @@ export function createEscalationStore(): EscalationStore {
       const record = records.find((r) => r.chamado_id === ticketId);
       return record && { ...record };
     },
+    findByProposalId(proposalId) {
+      const record = records.find((r) => r.proposta_id === proposalId);
+      return record && { ...record };
+    },
     list() {
       return records.map((r) => ({ ...r }));
     },
   };
 }
 
-// Business guards live here, not in the prompt: whoever calls this function
-// (model, API route, test) cannot escalate a non-open or already escalated ticket.
-export function registerEscalation(
+// Business guards live here, not in the prompt. Used twice: before a proposal
+// is shown to the human, and again at registration time (state may have changed).
+export function checkEscalationAllowed(
   store: EscalationStore,
-  input: RegisterEscalationInput,
-): ToolResult<Escalation> {
-  const found = getTicket({ chamado_id: input.chamado_id });
+  chamadoId: string,
+): ToolResult<Ticket> {
+  const found = getTicket({ chamado_id: chamadoId });
   if (!found.ok) return found;
 
   const ticket = found.data;
@@ -54,5 +60,20 @@ export function registerEscalation(
     return fail("ALREADY_ESCALATED", `Chamado ${ticket.id} já foi escalonado (${existing.id}).`);
   }
 
-  return ok(store.add(input));
+  return ok(ticket);
+}
+
+// Registers an approved proposal. Idempotent per proposal (D11, layer 1):
+// the same proposal arriving twice returns the existing record instead of a new one.
+export function registerEscalation(
+  store: EscalationStore,
+  proposal: Proposal,
+): ToolResult<Escalation> {
+  const replay = store.findByProposalId(proposal.id);
+  if (replay) return ok(replay);
+
+  const allowed = checkEscalationAllowed(store, proposal.chamado_id);
+  if (!allowed.ok) return allowed;
+
+  return ok(store.add(proposal));
 }

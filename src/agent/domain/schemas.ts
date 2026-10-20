@@ -26,11 +26,30 @@ export type Ticket = z.infer<typeof TicketSchema>;
 // Escalations live in their own collection; registering one never changes the ticket (D19).
 export const EscalationSchema = z.object({
   id: z.string().regex(/^ESC-\d{3,}$/),
+  proposta_id: z.string().min(1),
   chamado_id: ChamadoIdSchema,
   resumo: z.string().min(1),
   justificativa: z.string().min(1),
 });
 export type Escalation = z.infer<typeof EscalationSchema>;
+
+// --- Human approval ---
+
+// What the human sees and approves: exactly what will be registered.
+export const ProposalSchema = z.object({
+  id: z.string().min(1),
+  chamado_id: ChamadoIdSchema,
+  resumo: z.string().min(1),
+  justificativa: z.string().min(1),
+});
+export type Proposal = z.infer<typeof ProposalSchema>;
+
+// The resume value: a decision is always tied to one specific proposal.
+export const DecisionSchema = z.object({
+  proposta_id: z.string().min(1),
+  decisao: z.enum(["aprovar", "rejeitar"]),
+});
+export type Decision = z.infer<typeof DecisionSchema>;
 
 // --- Tool inputs (what the model must send) ---
 
@@ -72,7 +91,12 @@ export type ErrorCode =
   | "ALREADY_ESCALATED"
   // executor checks (tool call rejected before running)
   | "UNKNOWN_TOOL"
-  | "INVALID_ARGS";
+  | "INVALID_ARGS"
+  // human approval
+  | "PROPOSAL_ALREADY_PENDING"
+  | "ESCALATION_REJECTED"
+  | "NO_PENDING_PROPOSAL"
+  | "PROPOSAL_MISMATCH";
 
 export type ToolResult<T> =
   | { ok: true; data: T }

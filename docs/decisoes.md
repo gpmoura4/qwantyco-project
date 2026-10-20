@@ -245,14 +245,47 @@ Formato: data · contexto · opções · decisão · motivo (e risco, quando a d
 - **Decisão:** `qwen2.5:7b-instruct-q4_K_M`, configurado em `OLLAMA_MODEL`.
 - **Motivo:** único modelo fiel ao retorno das tools nos 5 turnos; o llama3.1 especulou num chamado inexistente, o que vai contra a regra "nunca inventar dados".
 
+## D26 — Aprovação humana num nó dedicado (`humanApproval`)
+- **Data:** 2026-10-19
+- **Contexto:** a documentação do `interrupt` (consultada em 2026-10-19) avisa que, na retomada, **o nó roda de novo desde o começo**. Qualquer efeito colateral antes do `interrupt` se repetiria.
+- **Opções:** (a) `interrupt` dentro do executor · (b) nó dedicado `humanApproval`.
+- **Decisão:** (b).
+  - O `executeTools` valida a tool call `register_escalation` (allowlist, Zod e regras de negócio via `checkEscalationAllowed`) e, se passar, grava `pendingProposal` no estado **sem registrar nada**.
+  - O grafo segue para `humanApproval`, que chama `interrupt(proposta)`. Nada com efeito colateral roda antes desse ponto.
+  - Depois da decisão, o nó registra (ou não) e o fluxo vai para END.
+  - Novo campo no estado: `pendingProposal: { proposal, toolCallId } | null`. O id da proposta é `prop-<uuid>`, gerado no `executeTools` (que não roda de novo na retomada).
+  - O `register_escalation` está na allowlist com `requiresApproval: true`. A função da tool lança erro se for executada direto.
+- **Motivo:** segue a recomendação da documentação (efeito colateral fora do trecho re-executado), e o LangSmith mostra um nó "humanApproval" pausado e retomado. O chamado resolvido é barrado **antes** de virar proposta (T02), então ninguém aprova algo inválido.
+- **Resolve:** P3 (com um ajuste: o `interrupt` fica no nó dedicado, não no executor) e P4 (guarda na proposta e de novo no registro).
+
+## D27 — Validação da aprovação no backend: três barreiras
+- **Data:** 2026-10-19
+- **Decisão:**
+  1. **`decideProposal()`** (`src/agent/approval.ts`): antes de retomar, lê a proposta pendente da sessão (`getPendingProposal`).
+     - Sem proposta pendente: devolve o registro existente, se a proposta já foi aprovada (idempotente), ou `NO_PENDING_PROPOSAL`.
+     - Id diferente: `PROPOSAL_MISMATCH`, sem tocar no grafo.
+     - Só retoma com `Command({ resume })` se o id bater.
+  2. **`responseSchema` Zod no `interrupt`:** o valor de retomada precisa ser `{ proposta_id, decisao: "aprovar" | "rejeitar" }`. Fora disso, o LangGraph lança erro e o grafo continua pausado. O nó também confere o `proposta_id` (defesa caso alguém retome o grafo sem passar pela função).
+  3. **Store idempotente por proposta:** o escalonamento guarda `proposta_id`, e `registerEscalation` devolve o registro existente se a mesma proposta chegar de novo. É a garantia final, mesmo com dois cliques simultâneos.
+- **Nomes:** o payload de decisão usa campos em PT (`proposta_id`, `decisao`, `"aprovar"`/`"rejeitar"`), por coerência com a D20. Na proposta da conversa estava escrito `{ proposalId, decision }`.
+- **Motivo:** o PDF exige que a aprovação seja "validada no backend e vinculada à proposta" e que repeti-la "não duplique o registro". Defesa em camadas: na mutação que removeu a barreira 1, a barreira do nó ainda impediu o registro.
+
+## D28 — Confirmação de escrita determinística (não escrita pelo LLM)
+- **Data:** 2026-10-19
+- **Opções:** (a) o LLM escreve a mensagem depois de aprovar ou rejeitar · (b) rejeitar é determinístico, aprovar passa pelo LLM · (c) as duas são determinísticas.
+- **Decisão:** (c). O `humanApproval` grava o `ToolMessage` com o resultado real e uma `AIMessage` montada pelo código (`confirmationText`), e vai para END:
+  - "Escalonamento ESC-001 registrado para o chamado CH-101."
+  - "Escalonamento rejeitado. Nada foi registrado."
+  - "Não foi possível registrar o escalonamento: …"
+- **Motivo:** "nunca confirmar operação que não ocorreu" vale **por construção**: a confirmação de uma escrita nunca depende de um modelo probabilístico. Também cumpre ao pé da letra "se a pessoa rejeitar, encerre sem registrar". A conversa continua normalmente com o LLM na mensagem seguinte, e o histórico contém o resultado.
+- **Verificação com o modelo real (smoke):** o qwen2.5 consultou o CH-101, propôs, foi aprovado e virou ESC-001; o CH-103 foi rejeitado sem registro; no CH-102 o modelo nem propôs. Observação: o modelo acrescentou uma inferência na justificativa ("afetando a operação diária"), o que reforça o valor de a pessoa ver a proposta exata antes de aprovar.
+
 ---
 
 ## Propostas em aberto (confirmar no passo indicado)
 
 | # | Proposta | Passo |
 |---|----------|-------|
-| P3 | A proposta nasce da tool call de escalonamento emitida pelo modelo. O executor valida e chama `interrupt` **antes** de executar, e a proposta exibida são os argumentos validados. | 4 |
-| P4 | O bloqueio de chamado não aberto é checado na criação da proposta **e** de novo no registro. | 4 |
 | P6 | Falha transitória determinística e injetável (por exemplo, falhar as N primeiras chamadas), nunca aleatória. | 5 |
 | P7 | Checkpointer e registros em memória ancorados em `globalThis`, para sobreviver ao HMR do `next dev`. | 6 |
 | P8 | Garantir o envio dos traces antes de a resposta da rota Next terminar (confirmar na documentação do LangSmith). | 8 |
