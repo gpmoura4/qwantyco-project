@@ -20,8 +20,8 @@ Status: ⬜ pendente · 🟨 parcial · ✅ atendido
 | R10 | Contexto mantido entre requisições; sessões diferentes separadas. Checkpoint em memória basta. | 3 | ✅ |
 | R11 | Interrupção e retomada do LangGraph; UI Next.js mostra a proposta exata com aprovar/rejeitar. | 4, 6, 7 | 🟨 |
 | R12 | Aprovação validada no backend e vinculada à proposta; repeti-la não duplica o registro. | 4, 6 | 🟨 |
-| R13 | Falhas simuladas nas tools; tratar chamado inexistente, entrada/saída inválida e ferramenta desconhecida. | 3, 5 | 🟨 |
-| R14 | Timeout, tentativas limitadas e limite total de execução ativa (espera humana não conta). Não depender só do prompt para bloquear ações. | 5 | ⬜ |
+| R13 | Falhas simuladas nas tools; tratar chamado inexistente, entrada/saída inválida e ferramenta desconhecida. | 3, 5 | ✅ |
+| R14 | Timeout, tentativas limitadas e limite total de execução ativa (espera humana não conta). Não depender só do prompt para bloquear ações. | 5 | ✅ |
 | R15 | LangSmith obrigatório: chamadas ao modelo, nós, tools, argumentos, resultados, erros, aprovação/retomada; correlação por sessão e execução; sem segredos. | 8 | ⬜ |
 | R16 | Evaluation: dataset com o caso obrigatório + ≥1 caso próprio; avaliador automático por código; experimento visível no LangSmith. | 9a, 9b | ⬜ |
 | R17 | Caso obrigatório "Liste todos os chamados abertos.": executar `listar_chamados` com `{"situacao":"aberto"}`, sucesso na consulta, responder CH-101 e CH-103 sem omissões, extras ou dados inventados. | 9a, 9b | ⬜ |
@@ -36,8 +36,8 @@ Status: ⬜ pendente · 🟨 parcial · ✅ atendido
 | T02 | Chamado resolvido | Impede escalonamento de CH-102, inclusive no backend. | 4 | ✅ |
 | T03 | Aprovação e rejeição | Aguarda decisão; rejeitar não escreve; aprovar executa a proposta exibida. | 4 | ✅ |
 | T04 | Aprovação repetida | Cria apenas um registro para a mesma operação. | 4 | ✅ |
-| T05 | Falha transitória | Erro simulado na tool e recuperação dentro do limite de tentativas. | 5 | ⬜ |
-| T06 | Saída inválida e limites | Não executa ferramenta indevida; encerra com erro controlado ao atingir o limite. | 3, 5 | 🟨 |
+| T05 | Falha transitória | Erro simulado na tool e recuperação dentro do limite de tentativas. | 5 | ✅ |
+| T06 | Saída inválida e limites | Não executa ferramenta indevida; encerra com erro controlado ao atingir o limite. | 3, 5 | ✅ |
 | T07 | Contexto e sessões | Continua a mesma conversa sem misturar o contexto de outra sessão. | 3 | ✅ |
 
 ## Entregáveis

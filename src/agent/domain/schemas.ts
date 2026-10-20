@@ -96,11 +96,26 @@ export type ErrorCode =
   | "PROPOSAL_ALREADY_PENDING"
   | "ESCALATION_REJECTED"
   | "NO_PENDING_PROPOSAL"
-  | "PROPOSAL_MISMATCH";
+  | "PROPOSAL_MISMATCH"
+  // failures and limits
+  | "INVALID_OUTPUT"
+  | "EXECUTION_LIMIT"
+  | "EXECUTION_FAILED";
 
 export type ToolResult<T> =
   | { ok: true; data: T }
   | { ok: false; error: { code: ErrorCode; message: string } };
+
+// Output contract of a tool: a ToolResult whose data matches `data`. The executor
+// checks every tool output against it before the model sees anything.
+export const toolResultSchema = <T extends z.ZodType>(data: T) =>
+  z.discriminatedUnion("ok", [
+    z.object({ ok: z.literal(true), data }),
+    z.object({
+      ok: z.literal(false),
+      error: z.object({ code: z.string(), message: z.string() }),
+    }),
+  ]);
 
 export const ok = <T>(data: T): ToolResult<T> => ({ ok: true, data });
 

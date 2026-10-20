@@ -280,14 +280,51 @@ Formato: data · contexto · opções · decisão · motivo (e risco, quando a d
 - **Motivo:** "nunca confirmar operação que não ocorreu" vale **por construção**: a confirmação de uma escrita nunca depende de um modelo probabilístico. Também cumpre ao pé da letra "se a pessoa rejeitar, encerre sem registrar". A conversa continua normalmente com o LLM na mensagem seguinte, e o histórico contém o resultado.
 - **Verificação com o modelo real (smoke):** o qwen2.5 consultou o CH-101, propôs, foi aprovado e virou ESC-001; o CH-103 foi rejeitado sem registro; no CH-102 o modelo nem propôs. Observação: o modelo acrescentou uma inferência na justificativa ("afetando a operação diária"), o que reforça o valor de a pessoa ver a proposta exata antes de aprovar.
 
+## D29 — Retry e timeout com as políticas nativas do LangGraph
+- **Data:** 2026-10-20
+- **Contexto:** a documentação geral não cobre o assunto. Os tipos instalados do `@langchain/langgraph` 1.5 mostram `retryPolicy` (`maxAttempts`, `initialInterval`, `backoffFactor`, `retryOn`) e `timeout` (por tentativa, reiniciado a cada retry, lança `NodeTimeoutError`) como opções de `addNode`.
+- **Opções:** (a) retry e timeout escritos à mão no executor · (b) políticas nativas nos nós.
+- **Decisão:** (b).
+  - `executeTools`: até 3 tentativas, timeout de 5 s por tentativa, retry **só** para `TransientToolError` ou `NodeTimeoutError`.
+  - `callModel`: até 2 tentativas, timeout de 60 s, retry para qualquer erro exceto abort.
+  - Backoff exponencial começando em 500 ms, com jitter (padrão do LangGraph).
+  - Valores em `DEFAULT_LIMITS` (`src/agent/run.ts`); os testes injetam limites pequenos.
+- **Motivo:** idiomático do framework, quase sem código, e cada tentativa aparece no log ("Retrying task executeTools…") e no trace. Erros de negócio são dados (D17) e por isso nunca são retentados. O retry re-executa o nó inteiro, o que é seguro: as leituras são idempotentes e o registro só acontece no `humanApproval`.
+
+## D30 — Limite total de execução ativa por invocação (`runAgent`)
+- **Data:** 2026-10-20
+- **Opções:** (a) limite por invocação (`recursionLimit` + `AbortSignal.timeout`) · (b) orçamento acumulado em campos do estado.
+- **Decisão:** (a).
+  - Toda chamada ao grafo passa por `runAgent()`, com `recursionLimit: 12` e prazo de 120 s.
+  - Os estouros viram erros controlados: `GraphRecursionError` vira `EXECUTION_LIMIT` (passos), o abort vira `EXECUTION_LIMIT` (tempo) e a falha técnica que esgotou as tentativas vira `EXECUTION_FAILED`. A mensagem em PT sempre diz que nenhuma operação foi registrada.
+  - O `decideProposal` e o smoke usam `runAgent`, e a rota da API também usará.
+- **Motivo:** a pausa para aprovação **encerra** a invocação, e a decisão humana é outra invocação com orçamento próprio. A espera humana fica fora do limite por construção, sem campos novos no estado (teste: esperar 500 ms com orçamento de 300 ms e aprovar com sucesso). Resolve o Q2.
+- **Limitação conhecida:** se um run falha no meio, o checkpoint pode ficar com uma tool call sem `ToolMessage`. A sessão continua funcionando (testado), mas o histórico não registra a falha. Vai para as limitações do README.
+
+## D31 — Injeção de falhas determinística (`faults`)
+- **Data:** 2026-10-20
+- **Opções:** (a) opção `faults` no `buildGraph` + variável `SIMULATE_TOOL_FAILURE` · (b) tools defeituosas só nos testes.
+- **Decisão:** (a).
+  - Formato `tool:modo:vezes` (ex.: `listar_chamados:error:2`). Cada tool call falha nas N primeiras tentativas e depois funciona.
+  - Modos: `error` (lança `TransientToolError`), `timeout` (trava até o timeout do nó abortar) e `invalid_output` (retorno corrompido).
+  - Desligado por padrão. Uma entrada malformada lança erro, para não ser ignorada em silêncio.
+- **Motivo:** um único mecanismo serve aos testes e à demonstração ao vivo no LangSmith.
+- **Verificação com o modelo real:** `listar_chamados:error:2` recuperou na 3ª tentativa e respondeu CH-101 e CH-103; `listar_chamados:error:3` terminou em `EXECUTION_FAILED`, sem resposta inventada.
+
+## D32 — Validação de saída: das tools e do modelo
+- **Data:** 2026-10-20
+- **Decisão:**
+  - **Saída da tool:** cada tool de leitura tem um `outputSchema` Zod (`toolResultSchema`). Um retorno fora do contrato vira `INVALID_OUTPUT`, e o dado corrompido nunca chega ao modelo. Não é retentado, porque é um erro de dados e não uma falha transitória.
+  - **Saída do modelo:** tool calls com JSON malformado (`invalid_tool_calls` do LangChain) recebem `INVALID_ARGS` em vez de serem ignoradas, e o `routeAfterModel` também roteia nesse caso.
+- **Motivo:** o PDF pede tratar "entrada ou saída inválida" e "não executar ferramenta indevida". Modelos locais às vezes emitem JSON quebrado.
+
 ---
 
 ## Propostas em aberto (confirmar no passo indicado)
 
 | # | Proposta | Passo |
 |---|----------|-------|
-| P6 | Falha transitória determinística e injetável (por exemplo, falhar as N primeiras chamadas), nunca aleatória. | 5 |
 | P7 | Checkpointer e registros em memória ancorados em `globalThis`, para sobreviver ao HMR do `next dev`. | 6 |
 | P8 | Garantir o envio dos traces antes de a resposta da rota Next terminar (confirmar na documentação do LangSmith). | 8 |
 | P9 | Como o runner da avaliação trata um `interrupt` (casos da avaliação devem ficar em consulta). | 9a |
-| Q2 | Definição do "limite total de execução ativa": orçamento de tempo de relógio por execução, pausado durante o `interrupt`, mais um máximo de voltas modelo↔tool. | 5 |
+

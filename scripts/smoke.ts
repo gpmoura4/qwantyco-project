@@ -5,8 +5,10 @@ import { MemorySaver } from "@langchain/langgraph";
 import { decideProposal, getPendingProposal } from "@/agent/approval";
 import { createEscalationStore } from "@/agent/domain/escalations";
 import type { Decision } from "@/agent/domain/schemas";
+import { parseFaults } from "@/agent/faults";
 import { buildGraph } from "@/agent/graph";
 import { createChatModel } from "@/agent/model";
+import { runAgent } from "@/agent/run";
 
 // Each conversation is a separate session; turns inside it share context.
 // `decisao` simulates the human answer if the graph pauses for approval.
@@ -38,8 +40,10 @@ async function main() {
     model: createChatModel(),
     checkpointer: new MemorySaver(),
     escalationStore,
+    faults: parseFaults(process.env.SIMULATE_TOOL_FAILURE),
   });
-  console.log(`Model: ${process.env.OLLAMA_MODEL}\n`);
+  console.log(`Model: ${process.env.OLLAMA_MODEL}`);
+  console.log(`Simulated failures: ${process.env.SIMULATE_TOOL_FAILURE || "none"}\n`);
 
   for (const [index, { turns, decisao }] of CONVERSATIONS.entries()) {
     const threadId = `smoke-${index}`;
@@ -48,9 +52,13 @@ async function main() {
       console.log(`[user] ${text}`);
       const before = (await graph.getState(config)).values.messages?.length ?? 0;
       const started = Date.now();
-      const result = await graph.invoke({ messages: [new HumanMessage(text)] }, config);
-      // Skip the human message itself; print what the graph produced.
-      result.messages.slice(before + 1).forEach(print);
+      const run = await runAgent(graph, { messages: [new HumanMessage(text)] }, threadId);
+      if (run.ok) {
+        // Skip the human message itself; print what the graph produced.
+        run.data.messages.slice(before + 1).forEach(print);
+      } else {
+        console.log(`  [erro controlado] ${run.error.code}: ${run.error.message}`);
+      }
       console.log(`  (${Date.now() - started} ms)`);
 
       const proposal = await getPendingProposal(graph, threadId);

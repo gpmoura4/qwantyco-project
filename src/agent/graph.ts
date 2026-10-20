@@ -3,6 +3,7 @@ import { AIMessage, SystemMessage, type ToolMessage } from "@langchain/core/mess
 import {
   END,
   interrupt,
+  isNodeTimeoutError,
   MessagesValue,
   START,
   StateGraph,
@@ -22,13 +23,14 @@ import {
   type Proposal,
   type ToolResult,
 } from "./domain/schemas";
-import { executeToolCall, toToolMessage } from "./executor";
+import { executeToolCall, toToolMessage, type ExecutorContext } from "./executor";
+import { TransientToolError, type Faults } from "./faults";
 import { SYSTEM_PROMPT } from "./prompt";
+import { DEFAULT_LIMITS, type Limits } from "./run";
 import { TOOLS } from "./tools";
 
 // Typed graph state. pendingProposal holds the escalation waiting for a human
-// decision, plus the id of the tool call it answers. Fields for the execution
-// budget (step 5) are added when they are needed.
+// decision, plus the id of the tool call it answers.
 export const AgentState = new StateSchema({
   messages: MessagesValue,
   pendingProposal: z
@@ -37,6 +39,8 @@ export const AgentState = new StateSchema({
     .default(null),
 });
 
+export type AgentStateValue = typeof AgentState.State;
+
 type BuildGraphOptions = {
   // Injected so tests use a fake model through the same graph and executor.
   model: BaseChatModel;
@@ -44,33 +48,62 @@ type BuildGraphOptions = {
   checkpointer: BaseCheckpointSaver;
   // Where approved escalations are registered.
   escalationStore: EscalationStore;
+  // Simulated tool failures (off by default).
+  faults?: Faults;
+  // Timeouts and retries of the nodes (the per-invocation budget is in runAgent).
+  limits?: Limits;
 };
 
-export function buildGraph({ model, checkpointer, escalationStore }: BuildGraphOptions) {
+export function buildGraph({
+  model,
+  checkpointer,
+  escalationStore,
+  faults = {},
+  limits = DEFAULT_LIMITS,
+}: BuildGraphOptions) {
   if (!model.bindTools) throw new Error("The chat model does not support tool calling.");
 
   const allowlist = new Map(TOOLS.map((entry) => [entry.tool.name, entry]));
   const modelWithTools = model.bindTools(TOOLS.map((entry) => entry.tool));
+  const attempts = new Map<string, number>();
 
   // Model node: the LLM decides whether to answer or to call tools.
-  const callModel: GraphNode<typeof AgentState> = async (state) => {
-    const response = await modelWithTools.invoke([
-      new SystemMessage(SYSTEM_PROMPT),
-      ...state.messages,
-    ]);
+  const callModel: GraphNode<typeof AgentState> = async (state, config) => {
+    const response = await modelWithTools.invoke(
+      [new SystemMessage(SYSTEM_PROMPT), ...state.messages],
+      { signal: config.signal },
+    );
     return { messages: [response] };
   };
 
   // Executor node: validates every tool call of the last AI message. Reads run
-  // now; an escalation becomes a pending proposal (one at a time).
-  const executeTools: GraphNode<typeof AgentState> = async (state) => {
+  // now; an escalation becomes a pending proposal (one at a time). Malformed
+  // calls from the model are answered with INVALID_ARGS instead of ignored.
+  const executeTools: GraphNode<typeof AgentState> = async (state, config) => {
     const last = state.messages.at(-1);
-    const calls = last && AIMessage.isInstance(last) ? (last.tool_calls ?? []) : [];
+    const ai = last && AIMessage.isInstance(last) ? last : undefined;
+    const ctx: ExecutorContext = {
+      allowlist,
+      store: escalationStore,
+      faults,
+      attempts,
+      signal: config.signal,
+    };
     const messages: ToolMessage[] = [];
     let pendingProposal: { proposal: Proposal; toolCallId: string } | null = null;
 
-    for (const call of calls) {
-      const outcome = await executeToolCall(call, allowlist, escalationStore);
+    for (const bad of ai?.invalid_tool_calls ?? []) {
+      messages.push(
+        toToolMessage(
+          bad.id ?? "",
+          bad.name ?? "unknown",
+          fail("INVALID_ARGS", `Chamada de ferramenta malformada: ${bad.error ?? "JSON inválido"}.`),
+        ),
+      );
+    }
+
+    for (const call of ai?.tool_calls ?? []) {
+      const outcome = await executeToolCall(call, ctx);
       if (outcome.kind === "result") {
         messages.push(outcome.message);
       } else if (pendingProposal) {
@@ -107,7 +140,7 @@ export function buildGraph({ model, checkpointer, escalationStore }: BuildGraphO
       result = registerEscalation(escalationStore, pending.proposal);
     }
 
-    // The final message comes from the real result, never from the model (A3).
+    // The final message comes from the real result, never from the model (D28).
     return {
       messages: [
         toToolMessage(pending.toolCallId, "register_escalation", result),
@@ -119,17 +152,37 @@ export function buildGraph({ model, checkpointer, escalationStore }: BuildGraphO
 
   const routeAfterModel = (state: typeof AgentState.State) => {
     const last = state.messages.at(-1);
-    return last && AIMessage.isInstance(last) && last.tool_calls?.length ? "executeTools" : END;
+    const wantsTools =
+      last &&
+      AIMessage.isInstance(last) &&
+      (last.tool_calls?.length || last.invalid_tool_calls?.length);
+    return wantsTools ? "executeTools" : END;
   };
 
   const routeAfterTools = (state: typeof AgentState.State) =>
     state.pendingProposal ? "humanApproval" : "callModel";
 
+  // Retries only technical failures; business errors are data and never retried.
+  const retryPolicy = (maxAttempts: number, retryOn: (error: unknown) => boolean) => ({
+    maxAttempts,
+    initialInterval: limits.retryIntervalMs,
+    retryOn,
+  });
+  const isTransient = (error: unknown) =>
+    error instanceof TransientToolError || isNodeTimeoutError(error);
+  const isNotAbort = (error: unknown) => (error as Error | null)?.name !== "AbortError";
+
   // callModel -> (executeTools -> callModel)* -> END
   //                executeTools -> humanApproval -> END   (when there is a proposal)
   return new StateGraph(AgentState)
-    .addNode("callModel", callModel)
-    .addNode("executeTools", executeTools)
+    .addNode("callModel", callModel, {
+      retryPolicy: retryPolicy(limits.modelMaxAttempts, isNotAbort),
+      timeout: limits.modelTimeoutMs,
+    })
+    .addNode("executeTools", executeTools, {
+      retryPolicy: retryPolicy(limits.toolMaxAttempts, isTransient),
+      timeout: limits.toolTimeoutMs,
+    })
     .addNode("humanApproval", humanApproval)
     .addEdge(START, "callModel")
     .addConditionalEdges("callModel", routeAfterModel, ["executeTools", END])

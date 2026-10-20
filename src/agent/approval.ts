@@ -10,6 +10,7 @@ import {
   type ToolResult,
 } from "./domain/schemas";
 import type { AgentGraph } from "./graph";
+import { DEFAULT_LIMITS, runAgent, type Limits } from "./run";
 
 const sessionConfig = (threadId: string) => ({ configurable: { thread_id: threadId } });
 
@@ -34,18 +35,21 @@ export async function getPendingProposal(
   return parsed.success ? parsed.data : null;
 }
 
-// Backend validation of a human decision (A2). The graph is only resumed when the
-// decision matches the proposal pending in this session.
+// Backend validation of a human decision (D27). The graph is only resumed when the
+// decision matches the proposal pending in this session. The resume is a new
+// invocation with its own budget: the human waiting time is not counted.
 export async function decideProposal({
   graph,
   escalationStore,
   threadId,
   decision,
+  limits = DEFAULT_LIMITS,
 }: {
   graph: AgentGraph;
   escalationStore: EscalationStore;
   threadId: string;
   decision: Decision;
+  limits?: Limits;
 }): Promise<ToolResult<{ reply: string }>> {
   const pending = await getPendingProposal(graph, threadId);
 
@@ -63,6 +67,7 @@ export async function decideProposal({
     return fail("PROPOSAL_MISMATCH", "A decisão não corresponde à proposta pendente.");
   }
 
-  const state = await graph.invoke(new Command({ resume: decision }), sessionConfig(threadId));
-  return ok({ reply: String(state.messages.at(-1)?.content ?? "") });
+  const run = await runAgent(graph, new Command({ resume: decision }), threadId, limits);
+  if (!run.ok) return run;
+  return ok({ reply: String(run.data.messages.at(-1)?.content ?? "") });
 }

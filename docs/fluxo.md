@@ -3,7 +3,7 @@
 Mostra **quem chama quem** entre os arquivos quando o assistente roda. Atualizado ao fim de cada passo.
 Os diagramas são Mermaid (renderizam no GitHub e no preview de Markdown do VS Code).
 
-**Estado atual:** Passo 4. O grafo consulta chamados e prepara escalonamentos que pausam para aprovação humana. A API Next.js entra no Passo 6.
+**Estado atual:** Passo 5. O grafo consulta chamados, prepara escalonamentos com aprovação humana e roda com retry, timeout e limite de execução. A API Next.js entra no Passo 6.
 
 ---
 
@@ -18,7 +18,9 @@ flowchart TD
 
     subgraph Core["src/agent — core (nunca importa next)"]
         MODEL["model.ts<br/>createChatModel() → ChatOllama"]
+        RUN["run.ts<br/>runAgent() · DEFAULT_LIMITS"]
         APPROVAL["approval.ts<br/>decideProposal() · getPendingProposal() · confirmationText()"]
+        FAULTS["faults.ts<br/>parseFaults() · TransientToolError"]
         GRAPH["graph.ts<br/>buildGraph() · callModel · executeTools · humanApproval"]
         PROMPT["prompt.ts<br/>SYSTEM_PROMPT"]
         EXEC["executor.ts<br/>executeToolCall() · toToolMessage()"]
@@ -34,12 +36,17 @@ flowchart TD
     SAVER[("MemorySaver<br/>checkpoint por thread_id")]
 
     SMOKE --> MODEL
-    SMOKE --> GRAPH
+    SMOKE -->|buildGraph| GRAPH
+    SMOKE --> RUN
     SMOKE --> APPROVAL
-    TEST --> GRAPH
+    SMOKE -->|"parseFaults(env)"| FAULTS
+    TEST -->|buildGraph| GRAPH
+    TEST --> RUN
     TEST --> APPROVAL
     MODEL -.->|HTTP| OLLAMA
-    APPROVAL -->|"getState / invoke(Command resume)"| GRAPH
+    RUN -->|"invoke com recursionLimit + signal"| GRAPH
+    APPROVAL -->|getState| GRAPH
+    APPROVAL -->|"runAgent(Command resume)"| RUN
     APPROVAL --> ESC
     GRAPH --> PROMPT
     GRAPH --> TOOLS
@@ -48,6 +55,8 @@ flowchart TD
     GRAPH -->|confirmationText| APPROVAL
     GRAPH <-.->|"lê e grava o estado"| SAVER
     EXEC --> TOOLS
+    EXEC -->|"falhas simuladas"| FAULTS
+    GRAPH -->|"retryOn"| FAULTS
     EXEC -->|"checkEscalationAllowed()"| ESC
     TOOLS --> TICKETS
     ESC --> TICKETS
@@ -57,6 +66,8 @@ flowchart TD
 ```
 
 > O teste não usa `model.ts`: injeta o `fakeModel()` direto no `buildGraph`. O grafo, o executor e o domínio são os mesmos nos dois casos.
+>
+> `run.ts` é a porta de entrada de **toda execução**: aplica o limite de passos e de tempo por invocação e converte estouros em erro controlado.
 >
 > `approval.ts` é a porta de entrada da **decisão humana**: no Passo 6, a rota da API vai chamar `decideProposal()` em vez do `smoke.ts`.
 
@@ -78,6 +89,16 @@ flowchart LR
 
 Estado (`AgentState`): `messages` (histórico) + `pendingProposal` (proposta aguardando decisão, ou `null`).
 
+Políticas por nó (nativas do LangGraph, D29):
+
+| Nó | Retry | Timeout por tentativa | Retenta quando |
+|----|-------|-----------------------|----------------|
+| `callModel` | até 2 tentativas | 60 s | qualquer erro, exceto abort |
+| `executeTools` | até 3 tentativas (backoff 0,5 s → 1 s) | 5 s | `TransientToolError` ou `NodeTimeoutError` |
+| `humanApproval` | — | — | — |
+
+Por invocação (`runAgent`, D30): no máximo 12 passos e 120 s. A espera humana fica fora porque a pausa encerra a invocação.
+
 ---
 
 ## 3. Sequência: consulta simples ("Liste todos os chamados abertos.")
@@ -95,7 +116,7 @@ sequenceDiagram
     participant D as domain/tickets.ts
 
     U->>E: "Liste todos os chamados abertos."
-    E->>G: graph.invoke({ messages: [HumanMessage] }, { thread_id })
+    E->>G: runAgent → graph.invoke({ messages }, { thread_id, recursionLimit, signal })
     G->>S: carrega o histórico do thread_id
     Note over G: nó callModel
     G->>M: [SystemMessage(prompt.ts), ...messages] + tools (bindTools)
@@ -139,7 +160,7 @@ sequenceDiagram
     participant ES as domain/escalations.ts
 
     U->>E: "Consulte o CH-101 e prepare um escalonamento"
-    E->>G: graph.invoke(HumanMessage, { thread_id })
+    E->>G: runAgent → graph.invoke(HumanMessage, { thread_id })
     G->>M: callModel
     M-->>G: tool_call get_ticket { chamado_id: "CH-101" }
     G->>X: executeTools → get_ticket executa
@@ -165,7 +186,7 @@ sequenceDiagram
     E->>A: decideProposal({ proposta_id, decisao: "aprovar" })
     A->>G: getState → proposta pendente?
     A->>A: mesma proposta_id? sim
-    A->>G: invoke(Command({ resume: decisão }))
+    A->>G: runAgent(Command({ resume: decisão })) — orçamento novo
     G->>S: carrega o checkpoint pausado
     Note over G: humanApproval roda de novo desde o começo —<br/>interrupt() agora devolve a decisão (validada por Zod)
     G->>ES: registerEscalation(store, proposta)
@@ -182,7 +203,49 @@ Se a decisão for **rejeitar**, o passo `registerEscalation` não acontece e a m
 
 ---
 
-## 5. Decisões dentro do executor (`executeToolCall`)
+## 5. Sequência: falha transitória, retry e erro controlado
+
+Exemplo com `SIMULATE_TOOL_FAILURE=listar_chamados:error:2` (cada chamada falha nas 2 primeiras tentativas).
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant E as smoke.ts / teste
+    participant R as run.ts
+    participant G as graph.ts (LangGraph)
+    participant M as Modelo
+    participant X as executor.ts
+    participant F as faults.ts
+    participant T as tools.ts
+
+    E->>R: runAgent(graph, { messages }, threadId)
+    R->>G: invoke(..., { recursionLimit: 12, signal: AbortSignal.timeout(120 s) })
+    G->>M: callModel
+    M-->>G: tool_call listar_chamados { situacao: "aberto" }
+    loop retryPolicy do nó executeTools (até 3 tentativas)
+        G->>X: executeTools (tentativa n)
+        X->>F: falha simulada para esta tentativa?
+        alt tentativas 1 e 2
+            F-->>X: lança TransientToolError
+            X-->>G: exceção → retryOn = true → espera (backoff) e tenta de novo
+        else tentativa 3
+            X->>T: tool.invoke → listTickets
+            T-->>X: { ok: true, data: [CH-101, CH-103] }
+            X->>X: outputSchema ok
+            X-->>G: ToolMessage success
+        end
+    end
+    G->>M: callModel com o resultado real
+    M-->>G: "Chamados abertos: CH-101 e CH-103"
+    G-->>R: estado final
+    R-->>E: { ok: true, data }
+```
+
+Se as 3 tentativas falharem (`listar_chamados:error:3`), a exceção sai do grafo, e o `runAgent` devolve `{ ok: false, error: { code: "EXECUTION_FAILED" } }`. O modelo **não** é chamado de novo, então nenhuma resposta é inventada. Estouro de passos (`GraphRecursionError`) ou de tempo (abort) viram `EXECUTION_LIMIT`.
+
+---
+
+## 6. Decisões dentro do executor (`executeToolCall`)
 
 ```mermaid
 flowchart TD
@@ -191,8 +254,13 @@ flowchart TD
     B -- sim --> C{"args passam no<br/>schema Zod?"}
     C -- não --> E2["ToolMessage error<br/>INVALID_ARGS<br/>(nada é executado)"]
     C -- sim --> W{"requiresApproval?<br/>(register_escalation)"}
-    W -- não --> D["tool.invoke(args)<br/>→ função do domínio"]
-    D --> F{"ToolResult.ok?"}
+    W -- não --> FS{"falha simulada<br/>nesta tentativa?"}
+    FS -- "error / timeout" --> RT["exceção → retryPolicy do nó<br/>(ou EXECUTION_FAILED ao esgotar)"]
+    FS -- "invalid_output" --> O
+    FS -- não --> D["tool.invoke(args)<br/>→ função do domínio"]
+    D --> O{"saída passa no<br/>outputSchema?"}
+    O -- não --> E5["ToolMessage error<br/>INVALID_OUTPUT<br/>(dado descartado)"]
+    O -- sim --> F{"ToolResult.ok?"}
     F -- sim --> OK["ToolMessage success"]
     F -- não --> E3["ToolMessage error<br/>ex.: TICKET_NOT_FOUND"]
     W -- sim --> G{"checkEscalationAllowed<br/>aberto e não escalonado?"}
@@ -202,7 +270,7 @@ flowchart TD
 
 ---
 
-## 6. Barreiras da decisão humana (`decideProposal` → `humanApproval` → store)
+## 7. Barreiras da decisão humana (`decideProposal` → `humanApproval` → store)
 
 ```mermaid
 flowchart TD
@@ -229,3 +297,4 @@ flowchart TD
 | 2 | Domínio isolado: `tickets.ts`, `escalations.ts` e `schemas.ts`, chamados só pelos testes. |
 | 3 | Grafo `callModel ⇄ executeTools`, executor com allowlist + Zod, tools do LangChain, checkpointer por `thread_id`, entradas `smoke.ts` e testes. |
 | 4 | Nó `humanApproval` com `interrupt`, campo `pendingProposal` no estado, `register_escalation` vira proposta no executor, `approval.ts` (`decideProposal`) valida e retoma, store idempotente por `proposta_id`, confirmação determinística. |
+| 5 | `run.ts` (`runAgent`: limite de passos e tempo por invocação, erro controlado), `faults.ts` (falhas simuladas), `retryPolicy` e `timeout` nativos nos nós, validação de saída das tools (`outputSchema`) e tratamento de `invalid_tool_calls`. |

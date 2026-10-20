@@ -1,10 +1,12 @@
 import type { StructuredToolInterface } from "@langchain/core/tools";
 import { tool } from "@langchain/core/tools";
-import type { z } from "zod";
+import { z } from "zod";
 import {
   GetTicketInputSchema,
   ListTicketsInputSchema,
   RegisterEscalationInputSchema,
+  TicketSchema,
+  toolResultSchema,
 } from "./domain/schemas";
 import { getTicket, listTickets } from "./domain/tickets";
 
@@ -44,16 +46,25 @@ export const registerEscalationTool = tool(
   },
 );
 
-// Allowlist entry: the tool, the Zod schema the executor validates against, and
-// whether it needs human approval instead of direct execution.
+// Allowlist entry: the tool, the Zod schemas the executor validates input and
+// output against, and whether it needs human approval instead of direct execution.
 export type AllowedTool = {
   tool: StructuredToolInterface;
   schema: z.ZodType;
+  outputSchema?: z.ZodType;
   requiresApproval?: boolean;
 };
 
 export const TOOLS: AllowedTool[] = [
-  { tool: listarChamadosTool, schema: ListTicketsInputSchema },
-  { tool: getTicketTool, schema: GetTicketInputSchema },
+  {
+    tool: listarChamadosTool,
+    schema: ListTicketsInputSchema,
+    outputSchema: toolResultSchema(z.array(TicketSchema)),
+  },
+  {
+    tool: getTicketTool,
+    schema: GetTicketInputSchema,
+    outputSchema: toolResultSchema(TicketSchema),
+  },
   { tool: registerEscalationTool, schema: RegisterEscalationInputSchema, requiresApproval: true },
 ];

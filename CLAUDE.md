@@ -36,6 +36,7 @@ npm test           # testes offline (Vitest, modelo falso, sem rede)
 npm run test:watch # testes em modo watch
 npm run lint       # ESLint
 npm run smoke      # smoke manual com o modelo real (Ollama); não faz parte do npm test
+# falhas simuladas: SIMULATE_TOOL_FAILURE=listar_chamados:error:2 npm run smoke  (modos: error | timeout | invalid_output)
 # npm run eval     # avaliação no LangSmith — criado no Passo 9
 ```
 
