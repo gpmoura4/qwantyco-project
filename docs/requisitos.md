@@ -8,7 +8,7 @@ Status: ⬜ pendente · 🟨 parcial · ✅ atendido
 
 | ID  | Requisito | Passo | Status |
 |-----|-----------|-------|--------|
-| R01 | Assistente de suporte da empresa fictícia **Aurora**: consulta chamados, lista os abertos e prepara escalonamento para revisão humana. | 3–7 | ⬜ |
+| R01 | Assistente de suporte da empresa fictícia **Aurora**: consulta chamados, lista os abertos e prepara escalonamento para revisão humana. | 3–7 | ✅ |
 | R02 | Fluxo: solicitação → consulta → proposta (resumo + justificativa) → aprovação → registro → resultado. Rejeição encerra sem registrar; consulta simples termina após a resposta. | 4 | ✅ |
 | R03 | Tool `listar_chamados` com filtro pelo argumento `situacao` (nomes obrigatórios). | 2, 3 | ✅ |
 | R04 | Tool de consulta de chamado por identificador (nome livre). | 2, 3 | ✅ |
@@ -18,7 +18,7 @@ Status: ⬜ pendente · 🟨 parcial · ✅ atendido
 | R08 | O modelo emite a tool call com argumentos; o executor valida e executa a função mockada; a resposta usa o retorno. Nada de resposta fixa. | 3 | ✅ |
 | R09 | Orquestração em LangGraph, estado tipado e contratos validados. | 3 | ✅ |
 | R10 | Contexto mantido entre requisições; sessões diferentes separadas. Checkpoint em memória basta. | 3 | ✅ |
-| R11 | Interrupção e retomada do LangGraph; UI Next.js mostra a proposta exata com aprovar/rejeitar. | 4, 6, 7 | 🟨 |
+| R11 | Interrupção e retomada do LangGraph; UI Next.js mostra a proposta exata com aprovar/rejeitar. | 4, 6, 7 | ✅ |
 | R12 | Aprovação validada no backend e vinculada à proposta; repeti-la não duplica o registro. | 4, 6 | ✅ |
 | R13 | Falhas simuladas nas tools; tratar chamado inexistente, entrada/saída inválida e ferramenta desconhecida. | 3, 5 | ✅ |
 | R14 | Timeout, tentativas limitadas e limite total de execução ativa (espera humana não conta). Não depender só do prompt para bloquear ações. | 5 | ✅ |

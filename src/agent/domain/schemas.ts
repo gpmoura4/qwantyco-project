@@ -33,6 +33,13 @@ export const EscalationSchema = z.object({
 });
 export type Escalation = z.infer<typeof EscalationSchema>;
 
+// Read view returned by the read tools: the ticket (never mutated, D19) joined with
+// its escalation, if any. Gives the model a source of truth for "was it escalated?".
+export const TicketViewSchema = TicketSchema.extend({
+  escalonamento: EscalationSchema.pick({ id: true, resumo: true, justificativa: true }).nullable(),
+});
+export type TicketView = z.infer<typeof TicketViewSchema>;
+
 // --- Human approval ---
 
 // What the human sees and approves: exactly what will be registered.

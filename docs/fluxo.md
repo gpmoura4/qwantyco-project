@@ -3,7 +3,7 @@
 Mostra **quem chama quem** entre os arquivos quando o assistente roda. Atualizado ao fim de cada passo.
 Os diagramas são Mermaid (renderizam no GitHub e no preview de Markdown do VS Code).
 
-**Estado atual:** Passo 6. A API Next.js (`/api/chat` e `/api/chat/decision`) expõe o agente: consulta, escalonamento com aprovação humana, retry, timeout e limites. A UI de chat entra no Passo 7.
+**Estado atual:** Passo 7 (com ajustes D38, D40 e D41). A UI de chat (`src/app/chat.tsx`) usa a API Next.js (`/api/chat` e `/api/chat/decision`), que expõe o agente: consulta, escalonamento com aprovação humana, retry, timeout e limites. O tracing no LangSmith entra no Passo 8.
 
 ---
 
@@ -11,7 +11,7 @@ Os diagramas são Mermaid (renderizam no GitHub e no preview de Markdown do VS C
 
 ```mermaid
 flowchart TD
-    C["Navegador / curl"] -->|"HTTP POST"| R["Rotas Next.js<br/>api/chat · api/chat/decision<br/>(Zod → core → HTTP)"]
+    C["UI de chat (src/app/chat.tsx)<br/>ou curl"] -->|"fetch POST"| R["Rotas Next.js<br/>api/chat · api/chat/decision<br/>(Zod → core → HTTP)"]
     R -.->|getRuntime| RT["runtime.ts<br/>grafo + store + checkpointer<br/>(um por processo, globalThis)"]
     R --> CH["chat.ts<br/>sendMessage · sendDecision"]
     CH --> AP["approval.ts<br/>decideProposal<br/>(valida a decisão)"]
@@ -20,6 +20,7 @@ flowchart TD
     RUN --> G["graph.ts (LangGraph)<br/>callModel · executeTools · humanApproval"]
     G --> M["Modelo<br/>ChatOllama (qwen2.5) ou fakeModel"]
     G --> X["executor.ts<br/>allowlist · Zod · regras · saída"]
+    G --> GD["guard.ts · checkReply<br/>resposta final x evidência das tools"]
     X --> T["tools.ts<br/>listar_chamados · get_ticket"]
     T --> D["domain/<br/>tickets · escalations · schemas"]
     G -->|"humanApproval:<br/>registerEscalation"| D
@@ -35,7 +36,8 @@ Leitura de cima para baixo: cada camada só conhece a de baixo. As regras de neg
 ```mermaid
 flowchart TD
     subgraph Entrada["Pontos de entrada"]
-        CLIENT["Navegador / curl<br/>(Passo 7: UI)"]
+        PAGE["src/app/page.tsx<br/>(Server Component)"]
+        CLIENT["src/app/chat.tsx<br/>'use client' · fetch"]
         SMOKE["scripts/smoke.ts<br/>(modelo real)"]
         TEST["tests/*.test.ts<br/>(fakeModel)"]
     end
@@ -56,10 +58,11 @@ flowchart TD
         GRAPH["graph.ts<br/>buildGraph() · callModel · executeTools · humanApproval"]
         PROMPT["prompt.ts<br/>SYSTEM_PROMPT"]
         EXEC["executor.ts<br/>executeToolCall() · toToolMessage()"]
-        TOOLS["tools.ts<br/>listar_chamados · get_ticket · register_escalation · TOOLS"]
+        GUARD["guard.ts<br/>findReplyViolation() · alreadyCorrected()"]
+        TOOLS["tools.ts<br/>createTools(store): listar_chamados · get_ticket · register_escalation"]
         subgraph Domain["domain/ — funções puras"]
             TICKETS["tickets.ts<br/>listTickets() · getTicket() · mocks"]
-            ESC["escalations.ts<br/>store · checkEscalationAllowed() · registerEscalation()"]
+            ESC["escalations.ts<br/>store · checkEscalationAllowed() · registerEscalation()<br/>getTicketView() · listTicketViews()"]
             SCHEMAS["schemas.ts<br/>contratos Zod · Proposal · Decision · ToolResult"]
         end
     end
@@ -67,6 +70,7 @@ flowchart TD
     OLLAMA[("Ollama local<br/>qwen2.5:7b-instruct")]
     SAVER[("MemorySaver<br/>checkpoint por thread_id")]
 
+    PAGE --> CLIENT
     CLIENT -->|"POST { sessionId, message }"| RCHAT
     CLIENT -->|"POST { sessionId, proposta_id, decisao }"| RDEC
     RCHAT --> HTTPH
@@ -91,6 +95,7 @@ flowchart TD
     GRAPH --> PROMPT
     GRAPH --> TOOLS
     GRAPH --> EXEC
+    GRAPH -->|"checkReply"| GUARD
     GRAPH -->|"humanApproval: registerEscalation()"| ESC
     GRAPH -->|confirmationText| APPROVAL
     GRAPH <-.->|"lê e grava o estado"| SAVER
@@ -98,6 +103,7 @@ flowchart TD
     EXEC -->|"falhas simuladas"| FAULTS
     GRAPH -->|"retryOn"| FAULTS
     EXEC -->|"checkEscalationAllowed()"| ESC
+    TOOLS -->|"visão chamado + escalonamento"| ESC
     TOOLS --> TICKETS
     ESC --> TICKETS
     TICKETS --> SCHEMAS
@@ -121,7 +127,10 @@ flowchart TD
 flowchart LR
     START((START)) --> CM["callModel<br/>(LLM decide)"]
     CM --> R1{"routeAfterModel<br/>tem tool_calls?"}
-    R1 -- não --> END((END))
+    R1 -- não --> CR{"checkReply<br/>(guard da resposta)<br/>violação?"}
+    CR -- não --> END((END))
+    CR -->|"1ª violação no turno:<br/>remove resposta + correção"| CM
+    CR -->|"2ª violação:<br/>mensagem honesta"| END
     R1 -- sim --> ET["executeTools<br/>(valida; leitura executa;<br/>escrita vira proposta)"]
     ET --> R2{"routeAfterTools<br/>pendingProposal?"}
     R2 -- não --> CM
@@ -130,6 +139,8 @@ flowchart LR
 ```
 
 Estado (`AgentState`): `messages` (histórico) + `pendingProposal` (proposta aguardando decisão, ou `null`).
+
+`checkReply` (D40) confere a resposta final contra as tools: (1) pedido de escalonamento explícito, chamado aberto e sem escalonamento no `get_ticket` do turno, mas sem `register_escalation`; (2) texto afirma proposta criada sem `register_escalation`; (3) cita `CH-xxx`/`ESC-xxx` que nenhuma tool retornou. No máximo uma correção por turno.
 
 Políticas por nó (nativas do LangGraph, D29):
 
@@ -167,8 +178,8 @@ sequenceDiagram
     G->>X: executeToolCall(toolCall, allowlist, store)
     X->>X: allowlist ok · Zod ok
     X->>T: tool.invoke({ situacao: "aberto" })
-    T->>D: listTickets({ situacao: "aberto" })
-    D-->>X: { ok: true, data: [CH-101, CH-103] }
+    T->>D: listTicketViews(store, { situacao: "aberto" })
+    D-->>X: { ok: true, data: [CH-101, CH-103] } (cada um com "escalonamento")
     X-->>G: ToolMessage (status "success")
     Note over G: sem proposta → volta para callModel
     G->>M: [System, Human, AIMessage(tool_call), ToolMessage]
@@ -193,7 +204,7 @@ São **duas chamadas** ao grafo: a primeira pausa no `interrupt`; a segunda (a d
 sequenceDiagram
     autonumber
     actor U as Usuário
-    participant E as Rotas /api/chat* + chat.ts
+    participant E as UI (chat.tsx) → rotas /api/chat* → chat.ts
     participant A as approval.ts
     participant G as graph.ts
     participant S as MemorySaver
@@ -221,11 +232,11 @@ sequenceDiagram
     G-->>E: retorna com a proposta pendente
     E->>A: getPendingProposal(thread_id)
     A-->>E: proposta exata
-    E-->>U: 200 { kind: "approval_required", proposal, reply }
+    E-->>U: 200 { kind: "approval_required", proposal, reply } → cartão com Aprovar / Rejeitar, campo de mensagem bloqueado
 
     Note over U,ES: ... tempo de espera humana (não consome o limite de execução) ...
 
-    U->>E: POST /api/chat/decision { sessionId, proposta_id, decisao: "aprovar" }
+    U->>E: clica Aprovar → POST /api/chat/decision { sessionId, proposta_id, decisao: "aprovar" }
     E->>A: parseBody (Zod) → decideProposal({ proposta_id, decisao })
     A->>G: getState → proposta pendente?
     A->>A: mesma proposta_id? sim
@@ -235,7 +246,8 @@ sequenceDiagram
     G->>ES: registerEscalation(store, proposta)
     ES->>ES: idempotência por proposta_id · guardas de novo
     ES-->>G: { ok: true, data: ESC-001 }
-    G->>G: ToolMessage + AIMessage determinística (confirmationText)
+    G->>ES: getTicketView(CH-101) → chamado + escalonamento ESC-001
+    G->>G: ToolMessage (visão atualizada, mesmo formato do get_ticket) + AIMessage determinística
     G->>S: checkpoint final (pendingProposal = null)
     G-->>A: estado final
     A-->>E: "Escalonamento ESC-001 registrado para o chamado CH-101."
@@ -342,3 +354,6 @@ flowchart TD
 | 4 | Nó `humanApproval` com `interrupt`, campo `pendingProposal` no estado, `register_escalation` vira proposta no executor, `approval.ts` (`decideProposal`) valida e retoma, store idempotente por `proposta_id`, confirmação determinística. |
 | 5 | `run.ts` (`runAgent`: limite de passos e tempo por invocação, erro controlado), `faults.ts` (falhas simuladas), `retryPolicy` e `timeout` nativos nos nós, validação de saída das tools (`outputSchema`) e tratamento de `invalid_tool_calls`. |
 | 6 | Rotas `POST /api/chat` e `POST /api/chat/decision` (finas: Zod → core → HTTP), `chat.ts` (`sendMessage` recusa mensagem com proposta pendente, `sendDecision`), `runtime.ts` (runtime único em `globalThis`). |
+| 7 | UI: `page.tsx` (Server Component) renderiza `chat.tsx` (`'use client'`), que chama as rotas com `fetch`, mostra o cartão da proposta e bloqueia o envio enquanto há proposta pendente. |
+| 7 (ajuste) | Tools de leitura criadas por runtime (`createTools(store)`) e devolvendo a visão chamado + `escalonamento`; após a aprovação, o `ToolMessage` traz a visão atualizada (D38). Prompt reorganizado em passos. |
+| 7 (ajuste 2) | Nó `checkReply` (`guard.ts`) após a resposta final: correção única ou mensagem honesta quando a resposta afirma ação não feita, cita dado sem fonte ou ignora pedido explícito de escalonamento (D40). UI com "Como usar" e ações rápidas (D41). |

@@ -17,7 +17,15 @@ const CONVERSATIONS: { turns: string[]; decisao?: Decision["decisao"] }[] = [
   { turns: ["Consulte o CH-102."] },
   { turns: ["Consulte o CH-999."] },
   { turns: ["Consulte o CH-101.", "Qual é o cliente desse chamado?"] },
-  { turns: ["Consulte o CH-101 e prepare um escalonamento se ele estiver aberto."], decisao: "aprovar" },
+  {
+    turns: [
+      "Consulte o CH-101 e prepare um escalonamento se ele estiver aberto.",
+      // Follow-ups after approval: the answer must come from get_ticket (D38).
+      "qual o status do chamado do pão dourado?",
+      "esse chamado já foi escalonado?",
+    ],
+    decisao: "aprovar",
+  },
   { turns: ["Consulte o CH-103 e prepare um escalonamento se ele estiver aberto."], decisao: "rejeitar" },
   { turns: ["Consulte o CH-102 e prepare um escalonamento se ele estiver aberto."], decisao: "aprovar" },
 ];

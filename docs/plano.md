@@ -14,7 +14,7 @@ Status: `[ ]` pendente · `[~]` em andamento / aguardando OK · `[x]` concluído
 | 4 | [x] | **Aprovação humana**: proposta (chamado, resumo, justificativa), `interrupt` e retomada, validação da aprovação contra a proposta pendente, idempotência, rejeição sem registro | T02, T03, T04 passando | R02, R11 (backend), R12 | commit |
 | 5 | [x] | **Falhas e limites**: falha transitória com retry limitado, timeout por tool, limite total de execução ativa (sem contar espera humana), erro controlado | T05, T06 passando | R13, R14 | commit + **push** |
 | 6 | [x] | **Rotas de API Next.js**: mensagem e decisão de aprovação, separação de sessões | Testes das rotas | R11, R12 | commit |
-| 7 | [ ] | **UI de chat**: mostra a proposta exata com aprovar/rejeitar | Fluxo manual no navegador | R11 | commit + **push** |
+| 7 | [x] | **UI de chat**: mostra a proposta exata com aprovar/rejeitar | Fluxo manual no navegador | R11 | commit + **push** |
 | 8 | [ ] | **Tracing LangSmith**: modelo, nós, tools, args, resultados, erros, aprovação/retomada; metadata/tags de sessão e execução; sem segredos | Trace completo visível no LangSmith | R15 | commit |
 | 9a | [ ] | **Dataset + avaliador por código (offline)** | Avaliador aprova resposta correta e reprova "pulou a consulta" e "inventou chamado" | R16–R18 | commit |
 | 9b | [ ] | **Experimento com modelo real** no LangSmith | Experimento visível no LangSmith | R16, R19 | commit + **push** |

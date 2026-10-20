@@ -1,5 +1,15 @@
-import { fail, ok, type Escalation, type Proposal, type Ticket, type ToolResult } from "./schemas";
-import { getTicket } from "./tickets";
+import {
+  fail,
+  ok,
+  type Escalation,
+  type GetTicketInput,
+  type ListTicketsInput,
+  type Proposal,
+  type Ticket,
+  type TicketView,
+  type ToolResult,
+} from "./schemas";
+import { getTicket, listTickets } from "./tickets";
 
 // In-memory record of escalations (simulated, as the PDF allows). Injected into
 // the functions so each test gets its own isolated store (D18).
@@ -76,4 +86,32 @@ export function registerEscalation(
   if (!allowed.ok) return allowed;
 
   return ok(store.add(proposal));
+}
+
+// --- Read views: ticket + its escalation (the ticket itself is never changed) ---
+
+function withEscalation(store: EscalationStore, ticket: Ticket): TicketView {
+  const escalation = store.findByTicketId(ticket.id);
+  return {
+    ...ticket,
+    escalonamento: escalation
+      ? { id: escalation.id, resumo: escalation.resumo, justificativa: escalation.justificativa }
+      : null,
+  };
+}
+
+export function getTicketView(
+  store: EscalationStore,
+  input: GetTicketInput,
+): ToolResult<TicketView> {
+  const found = getTicket(input);
+  return found.ok ? ok(withEscalation(store, found.data)) : found;
+}
+
+export function listTicketViews(
+  store: EscalationStore,
+  input: ListTicketsInput,
+): ToolResult<TicketView[]> {
+  const listed = listTickets(input);
+  return listed.ok ? ok(listed.data.map((ticket) => withEscalation(store, ticket))) : listed;
 }

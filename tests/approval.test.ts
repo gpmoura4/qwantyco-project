@@ -139,6 +139,83 @@ describe("T03 — approval and rejection", () => {
   });
 });
 
+describe("Read tools expose the escalation (source of truth, D38)", () => {
+  const lastToolResult = async (ctx: ReturnType<typeof setup>, threadId: string) => {
+    const state = await ctx.graph.getState(session(threadId));
+    return toolResult(state.values.messages.filter(ToolMessage.isInstance).at(-1)!);
+  };
+
+  it("get_ticket reports escalonamento: null before and ESC-001 after approval", async () => {
+    const ctx = setup();
+    ctx.model
+      .respondWithTools([{ name: "get_ticket", args: { chamado_id: "CH-101" } }])
+      .respond(new AIMessage("O CH-101 não foi escalonado."));
+    await ctx.graph.invoke(ask("O CH-101 foi escalonado?"), session("before"));
+    expect(await lastToolResult(ctx, "before")).toMatchObject({
+      ok: true,
+      data: { id: "CH-101", situacao: "aberto", escalonamento: null },
+    });
+
+    const pending = (await propose(ctx, "s1"))!;
+    await decideProposal({
+      ...ctx,
+      threadId: "s1",
+      decision: { proposta_id: pending.id, decisao: "aprovar" },
+    });
+
+    ctx.model
+      .respondWithTools([{ name: "get_ticket", args: { chamado_id: "CH-101" } }])
+      .respond(new AIMessage("O CH-101 foi escalonado (ESC-001)."));
+    await ctx.graph.invoke(ask("O CH-101 foi escalonado?"), session("after"));
+    // The ticket is unchanged (D19); the view joins it with its escalation.
+    expect(await lastToolResult(ctx, "after")).toMatchObject({
+      ok: true,
+      data: {
+        id: "CH-101",
+        situacao: "aberto",
+        escalonamento: { id: "ESC-001", resumo: ESCALATION_ARGS.resumo },
+      },
+    });
+  });
+
+  it("after approval, the newest tool result about the ticket shows the escalation", async () => {
+    const ctx = setup();
+    const pending = (await propose(ctx, "s1"))!;
+    await decideProposal({
+      ...ctx,
+      threadId: "s1",
+      decision: { proposta_id: pending.id, decisao: "aprovar" },
+    });
+
+    // Same shape as get_ticket, so an older "escalonamento": null in the history
+    // is superseded by true data (the model read the stale null before this fix).
+    expect(await lastToolResult(ctx, "s1")).toMatchObject({
+      ok: true,
+      data: { id: "CH-101", situacao: "aberto", escalonamento: { id: "ESC-001" } },
+    });
+  });
+
+  it("listar_chamados keeps returning exactly CH-101 and CH-103 as open", async () => {
+    const ctx = setup();
+    const pending = (await propose(ctx, "s1"))!;
+    await decideProposal({
+      ...ctx,
+      threadId: "s1",
+      decision: { proposta_id: pending.id, decisao: "aprovar" },
+    });
+
+    ctx.model
+      .respondWithTools([{ name: "listar_chamados", args: { situacao: "aberto" } }])
+      .respond(new AIMessage("CH-101 e CH-103."));
+    await ctx.graph.invoke(ask("Liste os abertos."), session("list"));
+
+    const { data } = await lastToolResult(ctx, "list");
+    expect(data.map((t: { id: string }) => t.id)).toEqual(["CH-101", "CH-103"]);
+    expect(data.map((t: { escalonamento: { id: string } | null }) => t.escalonamento?.id ?? null))
+      .toEqual(["ESC-001", null]);
+  });
+});
+
 describe("T04 — repeated approval creates a single record", () => {
   it("approving the same proposal twice returns the same ESC-001", async () => {
     const ctx = setup();

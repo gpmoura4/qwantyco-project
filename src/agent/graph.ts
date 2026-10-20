@@ -1,5 +1,11 @@
 import type { BaseChatModel } from "@langchain/core/language_models/chat_models";
-import { AIMessage, SystemMessage, type ToolMessage } from "@langchain/core/messages";
+import {
+  AIMessage,
+  HumanMessage,
+  RemoveMessage,
+  SystemMessage,
+  type ToolMessage,
+} from "@langchain/core/messages";
 import {
   END,
   interrupt,
@@ -13,7 +19,7 @@ import {
 } from "@langchain/langgraph";
 import { z } from "zod";
 import { confirmationText } from "./approval";
-import { registerEscalation, type EscalationStore } from "./domain/escalations";
+import { getTicketView, registerEscalation, type EscalationStore } from "./domain/escalations";
 import {
   DecisionSchema,
   fail,
@@ -25,9 +31,10 @@ import {
 } from "./domain/schemas";
 import { executeToolCall, toToolMessage, type ExecutorContext } from "./executor";
 import { TransientToolError, type Faults } from "./faults";
+import { alreadyCorrected, findReplyViolation, GUARD_NAME } from "./guard";
 import { SYSTEM_PROMPT } from "./prompt";
 import { DEFAULT_LIMITS, type Limits } from "./run";
-import { TOOLS } from "./tools";
+import { createTools } from "./tools";
 
 // Typed graph state. pendingProposal holds the escalation waiting for a human
 // decision, plus the id of the tool call it answers.
@@ -63,8 +70,9 @@ export function buildGraph({
 }: BuildGraphOptions) {
   if (!model.bindTools) throw new Error("The chat model does not support tool calling.");
 
-  const allowlist = new Map(TOOLS.map((entry) => [entry.tool.name, entry]));
-  const modelWithTools = model.bindTools(TOOLS.map((entry) => entry.tool));
+  const tools = createTools(escalationStore);
+  const allowlist = new Map(tools.map((entry) => [entry.tool.name, entry]));
+  const modelWithTools = model.bindTools(tools.map((entry) => entry.tool));
   const attempts = new Map<string, number>();
 
   // Model node: the LLM decides whether to answer or to call tools.
@@ -143,11 +151,34 @@ export function buildGraph({
     // The final message comes from the real result, never from the model (D28).
     return {
       messages: [
-        toToolMessage(pending.toolCallId, "register_escalation", result),
+        // On success the model sees the updated ticket view (same shape as get_ticket,
+        // with "escalonamento" filled), so the newest data about the ticket is true (D38).
+        toToolMessage(
+          pending.toolCallId,
+          "register_escalation",
+          result.ok ? getTicketView(escalationStore, { chamado_id: result.data.chamado_id }) : result,
+        ),
         new AIMessage(confirmationText(result)),
       ],
       pendingProposal: null,
     };
+  };
+
+  // Reply guard node (D40): checks the final answer against the tool results.
+  // First violation in a turn: drop the answer and ask the model once to fix it
+  // (it may call the tool now). Second violation: replace it with an honest message.
+  const checkReply: GraphNode<typeof AgentState> = async (state) => {
+    const violation = findReplyViolation(state.messages);
+    if (!violation) return {};
+
+    const reply = state.messages.at(-1)!;
+    const drop = reply.id ? [new RemoveMessage({ id: reply.id })] : [];
+    if (!alreadyCorrected(state.messages)) {
+      return {
+        messages: [...drop, new HumanMessage({ content: violation.correction, name: GUARD_NAME })],
+      };
+    }
+    return { messages: [...drop, new AIMessage(violation.fallback)] };
   };
 
   const routeAfterModel = (state: typeof AgentState.State) => {
@@ -156,7 +187,13 @@ export function buildGraph({
       last &&
       AIMessage.isInstance(last) &&
       (last.tool_calls?.length || last.invalid_tool_calls?.length);
-    return wantsTools ? "executeTools" : END;
+    return wantsTools ? "executeTools" : "checkReply";
+  };
+
+  // After the guard: a pending correction goes back to the model; otherwise done.
+  const routeAfterCheck = (state: typeof AgentState.State) => {
+    const last = state.messages.at(-1);
+    return last && HumanMessage.isInstance(last) && last.name === GUARD_NAME ? "callModel" : END;
   };
 
   const routeAfterTools = (state: typeof AgentState.State) =>
@@ -172,8 +209,9 @@ export function buildGraph({
     error instanceof TransientToolError || isNodeTimeoutError(error);
   const isNotAbort = (error: unknown) => (error as Error | null)?.name !== "AbortError";
 
-  // callModel -> (executeTools -> callModel)* -> END
+  // callModel -> (executeTools -> callModel)* -> checkReply -> END
   //                executeTools -> humanApproval -> END   (when there is a proposal)
+  //                checkReply -> callModel                (once per turn, on a violation)
   return new StateGraph(AgentState)
     .addNode("callModel", callModel, {
       retryPolicy: retryPolicy(limits.modelMaxAttempts, isNotAbort),
@@ -184,9 +222,11 @@ export function buildGraph({
       timeout: limits.toolTimeoutMs,
     })
     .addNode("humanApproval", humanApproval)
+    .addNode("checkReply", checkReply)
     .addEdge(START, "callModel")
-    .addConditionalEdges("callModel", routeAfterModel, ["executeTools", END])
+    .addConditionalEdges("callModel", routeAfterModel, ["executeTools", "checkReply"])
     .addConditionalEdges("executeTools", routeAfterTools, ["humanApproval", "callModel"])
+    .addConditionalEdges("checkReply", routeAfterCheck, ["callModel", END])
     .addEdge("humanApproval", END)
     .compile({ checkpointer });
 }

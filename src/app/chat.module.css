@@ -1,0 +1,175 @@
+.page {
+  --border: #d4d4d8;
+  --muted: #71717a;
+  --user-bg: #e0e7ff;
+  --assistant-bg: #f4f4f5;
+  --error-bg: #fee2e2;
+  --error-fg: #991b1b;
+  --proposal-bg: #fffbeb;
+  --proposal-border: #f59e0b;
+
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  width: 100%;
+  max-width: 760px;
+  min-height: 100vh;
+  margin: 0 auto;
+  padding: 24px 16px;
+}
+
+@media (prefers-color-scheme: dark) {
+  .page {
+    --border: #3f3f46;
+    --muted: #a1a1aa;
+    --user-bg: #312e81;
+    --assistant-bg: #27272a;
+    --error-bg: #450a0a;
+    --error-fg: #fecaca;
+    --proposal-bg: #422006;
+    --proposal-border: #d97706;
+  }
+}
+
+.page button {
+  padding: 8px 14px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+.page button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.header h1 {
+  font-size: 1.25rem;
+}
+
+.session,
+.proposalId {
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+
+.help {
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+.quick {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.quick input {
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+}
+
+.messages {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.message {
+  max-width: 85%;
+  padding: 10px 12px;
+  border-radius: 8px;
+  white-space: pre-wrap;
+  line-height: 1.45;
+}
+
+.user {
+  align-self: flex-end;
+  background: var(--user-bg);
+}
+
+.assistant {
+  align-self: flex-start;
+  background: var(--assistant-bg);
+}
+
+.error {
+  align-self: stretch;
+  background: var(--error-bg);
+  color: var(--error-fg);
+}
+
+.pending {
+  color: var(--muted);
+  font-style: italic;
+}
+
+.proposal {
+  padding: 16px;
+  border: 2px solid var(--proposal-border);
+  border-radius: 8px;
+  background: var(--proposal-bg);
+}
+
+.proposal h2 {
+  margin-bottom: 12px;
+  font-size: 1rem;
+}
+
+.proposal dl {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 6px 12px;
+}
+
+.proposal dt {
+  font-weight: 600;
+}
+
+.actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.form {
+  display: flex;
+  gap: 8px;
+}
+
+.form input {
+  flex: 1;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+}
+
+.srOnly {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+}

@@ -363,6 +363,94 @@ Formato: data · contexto · opções · decisão · motivo (e risco, quando a d
   - aprovar de novo → "já registrado";
   - corpo inválido → 400.
 
+## D37 — UI de chat: Client Component com `fetch`, CSS Module, sessão só no estado
+- **Data:** 2026-10-20
+- **Contexto:** guia do Next 16.4 instalado. Páginas são Server Components por padrão, e interatividade exige `'use client'`. O Next também oferece Server Functions (`'use server'`).
+- **Opções:**
+  - **Comunicação:** (a) Client Component chamando as rotas do Passo 6 com `fetch` · (b) Server Functions.
+  - **Estilo:** (a) CSS Module · (b) inline · (c) Tailwind (recusado na D08).
+  - **Sessão:** (a) só no estado React · (b) `sessionStorage` + rota de histórico.
+- **Decisão:** (a) nas três.
+  - `src/app/page.tsx` (Server Component) renderiza `src/app/chat.tsx` (`'use client'`), estilizado por `chat.module.css`.
+  - O UUID da sessão é criado na primeira mensagem, e "Nova conversa" gera outro.
+  - O cartão da proposta mostra chamado, resumo, justificativa e id **exatamente** como vieram da API, com os botões Aprovar e Rejeitar.
+  - O campo de mensagem fica bloqueado enquanto há proposta pendente ou requisição em andamento.
+  - Os erros 400, 409 e 503 aparecem como aviso com a mensagem em PT do backend.
+  - Os tipos de resposta vêm do core via `import type`, que é apagado na compilação: nenhum código de servidor vai para o navegador.
+- **Motivo:**
+  - A UI é só mais um cliente da API já testada, então existe um caminho único até o core. Server Functions criariam uma segunda porta de entrada, sem testes.
+  - O CSS Module é nativo e não exige dependência.
+  - A sessão no estado React é a opção mais simples, e trocar o UUID demonstra a separação de sessões.
+- **Limitação:** recarregar a página começa uma sessão nova na UI. O servidor mantém o histórico, mas a UI não o recupera.
+- **Verificação:** Chrome headless (Puppeteer do cache do `mermaid-cli`, fora do projeto) dirigiu a UI real com o modelo real:
+  - listagem com CH-101 e CH-103;
+  - escalonamento do CH-101 mostrou o cartão, com o campo bloqueado;
+  - Aprovar resultou em "ESC-001 registrado", e o cartão sumiu;
+  - "Nova conversa" trocou a sessão e limpou o histórico;
+  - escalonar o CH-103 e Rejeitar resultou em "Nada foi registrado".
+
+## D38 — Status de escalonamento: fonte de verdade na leitura e resultado da aprovação no mesmo formato
+- **Data:** 2026-10-20
+- **Contexto (achado do Guilherme testando a UI):** depois de escalonar e aprovar o chamado da Padaria Pão Dourado (CH-101), a pergunta "qual o status do chamado?" teve como resposta "aberto, ainda não foi escalonado e continua em análise". Isso é **dado inventado**, contra a regra principal do PDF.
+- **Diagnóstico** (reproduzido com o modelo real):
+  1. **Faltava fonte de verdade.** Pela D19, o escalonamento não altera o chamado, mas nenhuma tool expunha a coleção de escalonamentos. O `get_ticket` dizia só "aberto".
+  2. **O modelo responde sem reconsultar.** O qwen 7B responde perguntas de acompanhamento a partir do histórico e preenche lacunas.
+- **Opções:** (a) enriquecer as tools de leitura com o campo `escalonamento` · (b) nova tool `get_escalation`.
+- **Decisão:** (a), mais prompt reforçado, teste offline e caso de avaliação no Passo 9 (F1–F4 aprovados pelo Guilherme), com um ajuste descoberto nos experimentos:
+  - **F1 — Visão de leitura:** `listar_chamados` e `get_ticket` devolvem o chamado mais `escalonamento` (`null` ou `{ id, resumo, justificativa }`), calculado do store (`getTicketView` e `listTicketViews`). O chamado continua intacto (D19). As tools passam a ser criadas por runtime (`createTools(store)`).
+  - **F1b — Resultado da aprovação no mesmo formato (achado nos experimentos):** ao registrar, o `ToolMessage` do `register_escalation` passa a conter a **visão atualizada do chamado** (com `"escalonamento": { "id": "ESC-001" }`), e não mais o registro bruto.
+  - **F2 — Prompt reorganizado** em seções com passos numerados: regras gerais; procedimento de escalonamento ("chame `register_escalation` logo em seguida, sem pedir confirmação; a confirmação é a aprovação humana"); como ler `situacao` e `escalonamento`; "nunca diga que fez algo sem ter chamado a ferramenta".
+  - **F3 — Medição:** teste offline (`get_ticket` antes e depois da aprovação, resultado da aprovação no formato da visão, listagem de abertos inalterada). No Passo 9, este cenário vira o **caso adicional da avaliação**.
+  - **F4 — Texto simples:** o prompt pede respostas sem Markdown. Funciona só em parte: o modelo ainda usa `**` às vezes. É cosmético e não vale uma dependência de Markdown na UI.
+- **Experimentos com o modelo real** (5 cenários: listar, CH-101 com perguntas de acompanhamento, CH-103, CH-102, o fluxo do Guilherme; temperatura 0, 2 rodadas idênticas):
+
+  | Variante | CH-101 propõe | CH-103 propõe | Acompanhamento após aprovar |
+  |---|---|---|---|
+  | Prompt com regras soltas novas | ❌ | ❌ e **diz que registrou** | — |
+  | Prompt antigo + F1 | ✅ | ❌ | sem consulta, incompleto |
+  | Prompt em passos (F2) + F1 | ✅ | ✅ | ❌ "ainda não foi escalonado" (lia o `null` antigo do histórico) |
+  | F2 + F1 + contexto de escalonamentos injetado no system prompt | ❌ | ✅ | ❌, e o fluxo do Guilherme quebrou (descartado) |
+  | **F2 + F1 + F1b (adotado)** | ✅ | ✅ | ✅ "foi escalonado (ESC-001)" |
+- **Motivo:**
+  - O modelo obedece ao dado **mais recente** sobre o chamado no histórico. Se esse dado tem o mesmo formato e é verdadeiro, a resposta é verdadeira, mesmo quando o modelo não reconsulta a tool.
+  - A correção que funcionou foi **estrutural** (o formato dos dados), não o texto do prompt. Mudanças de prompt alteraram o comportamento do 7B de forma imprevisível, inclusive para pior.
+- **Limites honestos:** o modelo ainda não reconsulta `get_ticket` nas perguntas de acompanhamento, apesar da regra do prompt. Ele acerta porque o histórico agora é coerente. Uma afirmação inventada em texto livre não é bloqueável só por código, e por isso este cenário vai para a avaliação (Passo 9).
+
+## D39 — Manter o qwen2.5 7B (sem modelo maior)
+- **Data:** 2026-10-20
+- **Contexto:** com texto livre ("escalone o chamado do pão dourado" depois de uma listagem), o 7B consultava o chamado e respondia "proposta criada" **sem chamar `register_escalation`**: nenhum cartão e uma afirmação falsa. Reproduzido 3/3. Cinco variações de prompt corrigiam um cenário e quebravam outro, e uma delas fez o modelo escrever a tool call como texto.
+- **Opções:** (a) testar o `qwen2.5:14b-instruct` (cerca de 9 GB, cabe nos 24 GB) com um roteiro fixo · (b) guarda em código contra afirmação sem ação · (c) aceitar e documentar.
+- **Decisão:** não baixar modelo novo e seguir com (b), mais orientação na interface (D40, D41).
+- **Risco registrado (decisão contra a recomendação (a) do Claude):** o 7B continua no limite para tool calling em conversas longas e com texto livre. O guard reduz e torna visível, mas não elimina: quando a correção falha, o usuário recebe uma mensagem honesta, sem cartão. Para a apresentação, os botões de ação rápida usam frases medidas como estáveis. Se aparecerem novas falhas, a troca de modelo continua sendo a correção de raiz.
+
+## D40 — Guard da resposta final (`checkReply`)
+- **Data:** 2026-10-20
+- **Decisão:** novo nó `checkReply` (`src/agent/guard.ts`). Toda resposta final do modelo (sem tool calls) passa por ele antes de ir ao usuário. Ele aplica três checagens, todas baseadas em **evidência das tools**:
+  1. **Pedido de escalonamento não executado:** o usuário pediu no imperativo e sem ser pergunta ("escalone", "prepare um escalonamento"); o `get_ticket` do turno mostrou o chamado aberto e sem escalonamento; não houve `register_escalation`.
+  2. **Afirmação sem ação:** o texto diz que criou, preparou ou vai propor uma proposta ("proposta … criada", "proporei", "vou propor"…), mas não houve `register_escalation` no turno.
+  3. **Dado sem fonte:** a resposta cita `CH-xxx` ou `ESC-xxx` que não apareceu em nenhum retorno de tool da conversa.
+
+  Quando há violação, a resposta é removida do histórico (`RemoveMessage`) e o modelo recebe **uma** correção marcada (`name: "reply_guard"`), com instrução objetiva, por exemplo: "não peça confirmação; chame `register_escalation` com `chamado_id` CH-101". Se violar de novo no mesmo turno, a resposta é **substituída** por uma mensagem honesta com a frase recomendada. No máximo uma correção por turno, sem loop.
+- **Motivo:** o PDF exige "nunca inventar dados ou confirmar uma operação que não ocorreu" e "não depender só do prompt". O guard confere o texto contra fatos do sistema (tool calls e resultados), não contra a opinião do modelo.
+- **Verificação com o modelo real** (5 cenários × 2 rodadas, todos corretos):
+  - o fluxo do print do Guilherme gera o cartão, com o guard corrigindo uma vez;
+  - os botões no CH-101 depois de uma consulta prévia geram o cartão, também com uma correção;
+  - o fluxo "Sim" e o CH-103 geram o cartão;
+  - o CH-102 é recusado;
+  - as perguntas de status depois da aprovação são verdadeiras.
+- **UI real (Chrome headless):** botões → cartão → aprovar → "escalonado"; texto livre "escalone o chamado da Transportadora Rota Sul" → cartão → aprovar → status correto.
+- **Limites:** as checagens 1 e 2 dependem de padrões de texto em PT (imperativos e frases de proposta). Uma redação nova pode escapar, e por isso cada redação real encontrada vira teste (`tests/guard.test.ts`). Uma pergunta ("já foi escalonado?") nunca dispara a checagem 1.
+
+## D41 — Orientação na interface: ajuda e ações rápidas
+- **Data:** 2026-10-20
+- **Decisão:** a UI ganha um bloco "Como usar" e três ações rápidas com um campo de identificador:
+  - "Listar chamados abertos" envia "Liste todos os chamados abertos.";
+  - "Consultar" envia "Consulte o CH-xxx.";
+  - "Preparar escalonamento" envia "Consulte o CH-xxx e prepare um escalonamento se ele estiver aberto.".
+
+  O texto livre continua funcionando, com o guard por trás.
+- **Motivo:** as frases dos botões foram as mais estáveis nas medições com o 7B. O modelo continua no circuito (ele emite as tool calls, como o PDF exige); a UI só padroniza o pedido. Além disso, a demonstração fica reproduzível.
+
 ---
 
 ## Propostas em aberto (confirmar no passo indicado)
@@ -371,4 +459,5 @@ Formato: data · contexto · opções · decisão · motivo (e risco, quando a d
 |---|----------|-------|
 | P8 | Garantir o envio dos traces antes de a resposta da rota Next terminar (confirmar na documentação do LangSmith). | 8 |
 | P9 | Como o runner da avaliação trata um `interrupt` (casos da avaliação devem ficar em consulta). | 9a |
+| P10 | Caso adicional da avaliação: status de um chamado depois de escalonado e aprovado (D38). O avaliador confere a resposta contra o campo `escalonamento` do último resultado de tool. | 9a |
 

@@ -1,9 +1,6 @@
-// Placeholder: the chat UI is built in step 7 (see docs/plano.md).
+import Chat from "./chat";
+
+// Server Component: only renders the client-side chat (the interactive part).
 export default function Home() {
-  return (
-    <main style={{ padding: 24 }}>
-      <h1>Aurora — Assistente de Suporte</h1>
-      <p>Em construção.</p>
-    </main>
-  );
+  return <Chat />;
 }

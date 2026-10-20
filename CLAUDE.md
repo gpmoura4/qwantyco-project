@@ -39,6 +39,8 @@ npm run smoke      # smoke manual com o modelo real (Ollama); não faz parte do 
 # falhas simuladas: SIMULATE_TOOL_FAILURE=listar_chamados:error:2 npm run smoke  (modos: error | timeout | invalid_output)
 # npm run eval     # avaliação no LangSmith — criado no Passo 9
 ```
+- Comentários em linha separada nos blocos de comando: no zsh interativo, `#` na mesma linha vira argumento.
+- Depois de mudar `src/agent/`, **reinicie o `npm run dev`**: o runtime fica em `globalThis` (D35) e mantém grafo e prompt antigos até reiniciar.
 
 ## Estrutura de pastas
 ```
@@ -57,6 +59,8 @@ docs/        requisitos.md, plano.md, decisoes.md; references/ fica fora do git
 - **Aprovação validada no backend**, vinculada à proposta pendente (id da proposta). Repetir a aprovação **não duplica** o registro, e um chamado já escalonado não é escalonado de novo (D11).
 - Rejeição encerra sem registrar.
 - **Não depender só do prompt para bloquear ações.** O executor valida a allowlist de tools, os argumentos (Zod) e as regras de negócio.
+- **Resposta final conferida contra as tools** (`checkReply`, D40): afirmação de ação não feita, dado sem fonte ou pedido de escalonamento ignorado gera uma correção ou uma mensagem honesta. Toda redação nova que escapar vira teste em `tests/guard.test.ts`.
+- **Mudança de prompt ou modelo exige medição com o modelo real** (cenários de listar, consultar, escalonar CH-101/CH-103/CH-102 e status após aprovar). Com o 7B, o prompt é frágil (D38, D39).
 - O modelo emite a tool call; o executor valida e executa. Nada de resposta fixa.
 - Massa obrigatória: CH-101 e CH-103 abertos, CH-102 resolvido. Nenhum outro chamado aberto (quebraria a avaliação).
 - Só dados fictícios.
@@ -65,7 +69,7 @@ docs/        requisitos.md, plano.md, decisoes.md; references/ fica fora do git
 - **Idioma:** código, identificadores, comentários e commits em inglês. Texto ao usuário (UI, respostas, erros), system prompt e docs em português.
 - **Nomes obrigatórios do PDF:** tool `listar_chamados`, argumento `situacao`, valor `"aberto"`. As outras tools têm nome em inglês (`get_ticket`, `register_escalation`).
 - **Campos de domínio em PT** (D20): chamado `{ id, titulo, descricao, cliente, situacao }`, escalonamento `{ id, chamado_id, resumo, justificativa }`, e os argumentos das tools. Envelope técnico (`ok`, `data`, `error`, `code`, `message`) e códigos de erro ficam em EN.
-- O escalonamento **não altera** o chamado: fica numa coleção separada (D19).
+- O escalonamento **não altera** o chamado: fica numa coleção separada (D19). As tools de leitura devolvem a **visão** chamado + `escalonamento`, e o resultado da aprovação usa esse mesmo formato (D38).
 - TypeScript `strict`. Contratos de entrada e saída das tools validados com Zod.
 - Imports do core via alias `@/` (ex.: `@/agent/...`).
 - Testes em `tests/**/*.test.ts`, offline, determinísticos, sem rede e sem LLM real. Falhas simuladas são injetáveis, não aleatórias.
