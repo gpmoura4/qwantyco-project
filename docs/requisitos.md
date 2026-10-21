@@ -23,9 +23,9 @@ Status: ⬜ pendente · 🟨 parcial · ✅ atendido
 | R13 | Falhas simuladas nas tools; tratar chamado inexistente, entrada/saída inválida e ferramenta desconhecida. | 3, 5 | ✅ |
 | R14 | Timeout, tentativas limitadas e limite total de execução ativa (espera humana não conta). Não depender só do prompt para bloquear ações. | 5 | ✅ |
 | R15 | LangSmith obrigatório: chamadas ao modelo, nós, tools, argumentos, resultados, erros, aprovação/retomada; correlação por sessão e execução; sem segredos. | 8 | ✅ |
-| R16 | Evaluation: dataset com o caso obrigatório + ≥1 caso próprio; avaliador automático por código; experimento visível no LangSmith. | 9a, 9b | ⬜ |
-| R17 | Caso obrigatório "Liste todos os chamados abertos.": executar `listar_chamados` com `{"situacao":"aberto"}`, sucesso na consulta, responder CH-101 e CH-103 sem omissões, extras ou dados inventados. | 9a, 9b | ⬜ |
-| R18 | Avaliador verifica a execução real da tool e a correspondência com o retorno; demonstrar que reprova resposta que pula a consulta ou inventa chamado. | 9a | ⬜ |
+| R16 | Evaluation: dataset com o caso obrigatório + ≥1 caso próprio; avaliador automático por código; experimento visível no LangSmith. | 9a, 9b | 🟨 |
+| R17 | Caso obrigatório "Liste todos os chamados abertos.": executar `listar_chamados` com `{"situacao":"aberto"}`, sucesso na consulta, responder CH-101 e CH-103 sem omissões, extras ou dados inventados. | 9a, 9b | 🟨 |
+| R18 | Avaliador verifica a execução real da tool e a correspondência com o retorno; demonstrar que reprova resposta que pula a consulta ou inventa chamado. | 9a | ✅ |
 | R19 | Modelo real (local ou API) em ≥1 execução da avaliação; identificar o modelo e documentar a configuração; conta própria do LangSmith, recursos gratuitos. | 9b | ⬜ |
 
 ## Testes offline (doubles do modelo, mesmo grafo e executor; separados da avaliação com modelo real; sem exigir redação exata)

@@ -4,7 +4,7 @@ Desafio técnico Qwantyco. Assistente de suporte da empresa fictícia **Aurora**
 
 **Stack:** TypeScript 5.9 (`strict`) · Next.js 16 (App Router) · React 19 · LangGraph 1.5 · LangChain Core 1.2 · Zod 4 · Vitest 5 · LangSmith · LLM local via Ollama (`qwen2.5:7b-instruct-q4_K_M`).
 
-> **Estado:** núcleo, aprovação humana, falhas e limites, API, UI de chat e tracing no LangSmith estão prontos e testados. A **avaliação no LangSmith** (dataset, avaliador por código e experimento com o modelo real) está em construção. Andamento por passo em [`docs/plano.md`](docs/plano.md); requisitos e status em [`docs/requisitos.md`](docs/requisitos.md).
+> **Estado:** núcleo, aprovação humana, falhas e limites, API, UI de chat e tracing no LangSmith estão prontos e testados. O dataset e o avaliador por código da **avaliação** estão prontos e testados offline. Falta o **experimento no LangSmith com o modelo real**. Andamento por passo em [`docs/plano.md`](docs/plano.md); requisitos e status em [`docs/requisitos.md`](docs/requisitos.md).
 
 ---
 
@@ -88,6 +88,7 @@ Modos de falha: `error` (exceção transitória), `timeout` (a tool trava até o
 | `tests/api.test.ts` | Rotas Next.js chamadas direto: códigos HTTP, proposta pendente (409), sessões isoladas, envio de traces agendado |
 | `tests/guard.test.ts` | Guard da resposta final: afirmação sem ação, dado sem fonte, pedido de escalonamento ignorado |
 | `tests/tracing.test.ts` | Árvore de runs enviada ao LangSmith (capturada em memória): nome, tags e metadata da mensagem e da retomada; nós, modelo e tool com args e resultado |
+| `tests/evaluators.test.ts` | Avaliador da avaliação: aprova a execução correta e reprova consulta pulada, chamado inventado ou omitido, argumento errado, consulta com falha e efeito colateral; caso adicional pelo grafo, com a aprovação feita por código |
 
 ---
 
@@ -106,10 +107,23 @@ Com `LANGSMITH_TRACING=true`, cada execução do agente gera um trace no projeto
 
 ## Avaliação (LangSmith)
 
-**Em construção (Passos 9a e 9b do [plano](docs/plano.md)).** O que está previsto:
-- **Dataset:** o caso obrigatório "Liste todos os chamados abertos." e um caso adicional, o status de um chamado depois de escalonado e aprovado, conferido contra o campo `escalonamento`.
-- **Avaliador por código:** confere que `listar_chamados` foi executada com `{"situacao":"aberto"}` e que a resposta traz CH-101 e CH-103, sem omitir, acrescentar ou inventar chamados. Deve reprovar uma resposta que pula a consulta ou inventa um chamado.
-- **Experimento com o modelo real** (`qwen2.5:7b-instruct-q4_K_M`, `temperature: 0`), visível no LangSmith.
+O código fica em [`evals/`](evals/). O dataset e o avaliador estão prontos e testados offline. O experimento com o modelo real no LangSmith (`npm run eval`) entra no Passo 9b do [plano](docs/plano.md).
+
+**Dataset** (`evals/dataset.ts`)
+| Caso | Mensagens | O que se espera |
+|---|---|---|
+| Obrigatório | "Liste todos os chamados abertos." | `listar_chamados` executada com `{"situacao":"aberto"}`, com sucesso; resposta com CH-101 e CH-103, sem omissões, extras ou invenções |
+| Adicional | "Consulte o CH-101 e prepare um escalonamento se ele estiver aberto." → **aprovação** → "O CH-101 já foi escalonado?" | Escalonamento registrado; resposta de acordo com o campo `escalonamento` do último resultado de tool, sem ids sem fonte |
+
+O caso adicional reproduz um problema real encontrado durante o desenvolvimento: depois de aprovar, o modelo dizia que o chamado "ainda não foi escalonado" ([D38](docs/decisoes.md)).
+
+**Target** (`evals/target.ts`): roda cada caso num runtime novo, pelas mesmas portas de entrada da UI. Quando o grafo pausa para aprovação, o target faz o papel do humano e decide por código, passando pela mesma validação de backend. Ele devolve um registro do que **de fato executou**, tirado do estado do grafo: tool calls, resultados das tools, proposta, decisão e escalonamentos registrados.
+
+**Avaliador por código** (`evals/evaluators.ts`): dá uma nota 0/1 por critério, com comentário, mais `pass`.
+- **Obrigatório:** `tool_called`, `tool_succeeded`, `tool_matches_reference`, `answer_matches_tool` e `no_side_effects`.
+- **Adicional:** `escalation_registered`, `answer_matches_status` e `answer_ids_backed`.
+
+O avaliador lê os resultados das tools, que só existem se o executor executou a tool. Por isso, uma resposta com o texto certo mas **sem a consulta reprova**, e uma resposta que **inventa um chamado reprova**. As duas situações são demonstradas em `tests/evaluators.test.ts`.
 
 ---
 
@@ -152,6 +166,7 @@ Diagramas completos (camadas, arquivos, sequências de consulta, aprovação e f
 src/app/            UI (chat.tsx) e rotas de API finas (api/chat, api/chat/decision)
 src/agent/          core: grafo, executor, aprovação, limites, guard, modelo, tools
 src/agent/domain/   massa mockada, contratos Zod, regras e store de escalonamentos
+evals/              avaliação: dataset, target e avaliador por código
 tests/              testes offline (Vitest + fakeModel)
 scripts/            smoke manual com o modelo real
 docs/               plano, requisitos, decisões e fluxo
@@ -161,7 +176,7 @@ docs/               plano, requisitos, decisões e fluxo
 
 ## Decisões
 
-Todas as decisões, com contexto, opções e motivo, estão em [`docs/decisoes.md`](docs/decisoes.md) (D01–D44). As principais:
+Todas as decisões, com contexto, opções e motivo, estão em [`docs/decisoes.md`](docs/decisoes.md) (D01–D47). As principais:
 
 - **LLM local via Ollama** (D07, D25, D39): sem custo e sem chave de API. O `qwen2.5:7b` foi escolhido num smoke comparativo de tool calling.
 - **Executor próprio em vez de `ToolNode`/`createAgent`** (D23): a validação de allowlist, argumentos, regras e saída fica explícita e num lugar só.
@@ -171,6 +186,7 @@ Todas as decisões, com contexto, opções e motivo, estão em [`docs/decisoes.m
 - **Retry e timeout nativos do LangGraph e orçamento por invocação** (D29, D30): erros de negócio são dados e nunca são retentados.
 - **Guard da resposta final** (D40): confere o texto contra as tool calls e os resultados.
 - **Tracing** (D42–D44): identidade de cada execução, envio garantido com `after()` e nenhum segredo nos traces.
+- **Avaliação** (D45–D47): `evaluate()` do LangSmith; o avaliador lê o registro do que executou, não o texto do modelo; o caso adicional passa por uma aprovação feita por código.
 
 ---
 
@@ -181,5 +197,5 @@ Todas as decisões, com contexto, opções e motivo, estão em [`docs/decisoes.m
 - **Estado em memória:** sessões (`MemorySaver`) e escalonamentos se perdem quando o servidor reinicia. É um processo só, sem banco nem fila.
 - **Sem autenticação:** a sessão é um UUID gerado pelo navegador. O backend isola sessões entre si, mas não identifica usuários.
 - **Uma proposta pendente por vez** em cada sessão; mensagens novas são recusadas (409) até a decisão.
-- **Avaliação no LangSmith ainda não implementada** (ver a seção acima).
+- **Experimento no LangSmith ainda não executado** (Passo 9b). O avaliador confere os "dados inventados" pelos ids de chamado e escalonamento; um título ou cliente errado no texto livre não é detectado ([D46](docs/decisoes.md)).
 - Só dados fictícios; sem deploy público.

@@ -16,7 +16,7 @@ Status: `[ ]` pendente · `[~]` em andamento / aguardando OK · `[x]` concluído
 | 6 | [x] | **Rotas de API Next.js**: mensagem e decisão de aprovação, separação de sessões | Testes das rotas | R11, R12 | commit |
 | 7 | [x] | **UI de chat**: mostra a proposta exata com aprovar/rejeitar | Fluxo manual no navegador | R11 | commit + **push** |
 | 8 | [x] | **Tracing LangSmith**: modelo, nós, tools, args, resultados, erros, aprovação/retomada; metadata/tags de sessão e execução; sem segredos | Trace completo visível no LangSmith | R15 | commit |
-| 9a | [ ] | **Dataset + avaliador por código (offline)** | Avaliador aprova resposta correta e reprova "pulou a consulta" e "inventou chamado" | R16–R18 | commit |
+| 9a | [x] | **Dataset + avaliador por código (offline)** | Avaliador aprova resposta correta e reprova "pulou a consulta" e "inventou chamado" | R16–R18 | commit |
 | 9b | [ ] | **Experimento com modelo real** no LangSmith | Experimento visível no LangSmith | R16, R19 | commit + **push** |
 | 10 | [ ] | **README final + revisão** contra `docs/requisitos.md` | Checklist completo | E01–E05 | commit + **push** |
 | 11 | [ ] | **(Opcional) Bônus**: Assistants (suporte/viagens) no mesmo grafo + RAG local — só se o Guilherme decidir | Testes de separação | B1–B4 | commit + **push** |

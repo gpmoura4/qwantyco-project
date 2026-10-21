@@ -3,7 +3,7 @@
 Mostra **quem chama quem** entre os arquivos quando o assistente roda. Atualizado ao fim de cada passo.
 Os diagramas são Mermaid (renderizam no GitHub e no preview de Markdown do VS Code).
 
-**Estado atual:** Passo 8. A UI de chat (`src/app/chat.tsx`) usa a API Next.js (`/api/chat` e `/api/chat/decision`), que expõe o agente: consulta, escalonamento com aprovação humana, retry, timeout e limites. Toda execução gera um trace no LangSmith (seção 9).
+**Estado atual:** Passo 9a. A UI de chat (`src/app/chat.tsx`) usa a API Next.js (`/api/chat` e `/api/chat/decision`), que expõe o agente: consulta, escalonamento com aprovação humana, retry, timeout e limites. Toda execução gera um trace no LangSmith (seção 9). A avaliação (`evals/`) roda os casos pelas mesmas portas de entrada e confere o que de fato executou (seção 10). Por enquanto ela roda offline, e o experimento no LangSmith entra no 9b.
 
 ---
 
@@ -376,6 +376,27 @@ flowchart TD
 
 ---
 
+## 10. Avaliação: caso → target → registro → avaliador
+
+```mermaid
+flowchart TD
+    DS["evals/dataset.ts<br/>caso: mensagens + decisao<br/>referência: list_open · status_after_approval"] --> TG["evals/target.ts · runCase(model, inputs)<br/>runtime NOVO por caso"]
+    TG -->|"sendMessage (mesma porta da UI)"| CH["src/agent/chat.ts"]
+    CH --> GR["grafo · executor · tools"]
+    TG -->|"interrupt? faz o papel do humano:<br/>sendDecision(aprovar | rejeitar)"| CH
+    TG -->|"getState: mensagens do turno"| REC["registro por turno<br/>answer · tool_calls · tool_results<br/>proposal · decision · error<br/>+ escalonamentos registrados"]
+    REC --> EV["evals/evaluators.ts · evaluateCase<br/>uma nota 0/1 por critério + pass"]
+    DS -->|"referência"| EV
+    EV --> T["tests/evaluators.test.ts<br/>offline, modelo falso (9a)"]
+    EV -.-> LS["evaluate() no LangSmith<br/>modelo real (9b)"]
+```
+
+- O avaliador nunca lê a "opinião" do modelo sobre o que fez. Ele lê os `ToolMessage`, que só existem se o executor executou a tool, pareados com a tool call pelo `tool_call_id`.
+- **Caso obrigatório:** `tool_called` (exatamente `{"situacao":"aberto"}`), `tool_succeeded`, `tool_matches_reference`, `answer_matches_tool` (sem omissão nem extra) e `no_side_effects`.
+- **Caso adicional (P10):** `escalation_registered` (pré-requisito), `answer_matches_status` (contra o `escalonamento` da última visão do chamado) e `answer_ids_backed`.
+
+---
+
 ## Histórico de atualizações
 
 | Passo | O que mudou no fluxo |
@@ -389,3 +410,4 @@ flowchart TD
 | 7 (ajuste) | Tools de leitura criadas por runtime (`createTools(store)`) e devolvendo a visão chamado + `escalonamento`; após a aprovação, o `ToolMessage` traz a visão atualizada (D38). Prompt reorganizado em passos. |
 | 7 (ajuste 2) | Nó `checkReply` (`guard.ts`) após a resposta final: correção única ou mensagem honesta quando a resposta afirma ação não feita, cita dado sem fonte ou ignora pedido explícito de escalonamento (D40). UI com "Como usar" e ações rápidas (D41). |
 | 8 | Tracing: `runAgent` nomeia e etiqueta cada execução (`aurora_message`/`aurora_resume`, D43); as rotas agendam `awaitAllCallbacks()` com `after()` e o smoke aguarda no `finally` (D42); nova seção 9. |
+| 9a | `evals/`: dataset, target (`runCase`, runtime novo por caso, aprovação por código) e avaliador por código (`evaluateCase`), testados offline; nova seção 10 (D45–D47). |

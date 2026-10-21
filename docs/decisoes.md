@@ -484,12 +484,51 @@ Formato: data · contexto · opções · decisão · motivo (e risco, quando a d
 - **Verificação:** os 12 traces do smoke, com todos os runs filhos, foram baixados pela API e nenhum contém o valor da chave. A metadata tem só `LANGSMITH_TRACING`, dados do SDK e do runtime, `run_kind` e `thread_id`.
 - **Teste:** `tests/tracing.test.ts` falha se alguma das quatro variáveis não estiver `"false"`.
 
+## D45 — Avaliação com `evaluate()` do LangSmith; `langsmith` como dependência direta
+- **Data:** 2026-10-21
+- **Opções:** (1) script `npm run eval` com `evaluate()` de `langsmith/evaluation` · (2) integração Vitest (`langsmith/vitest`), em que o dataset e o experimento nascem dos arquivos de teste.
+- **Decisão:** (1), recomendação do Claude, aprovada pelo Guilherme. O `langsmith` passa a ser dependência direta, **fixada em 0.11.0**: a mesma versão que o `@langchain/core` já instalava. O lockfile ganhou só a linha da dependência raiz, e nenhum pacote novo foi baixado.
+- **Motivo:** o `evaluate()` mostra explicitamente as quatro peças (dataset → target → avaliadores → experimento), o que facilita explicar. A opção (2) mistura o Vitest com o modelo real, e o PDF pede para separar os testes offline da avaliação.
+- **Estrutura** (`evals/`, prevista na D05):
+  - `dataset.ts`: os casos;
+  - `target.ts`: `runCase`, que roda um caso;
+  - `evaluators.ts`: `evaluateCase`;
+  - `run.ts`: o `evaluate()`, no Passo 9b.
+- **Nota para o 9b:** o SDK passa `outputs` e `referenceOutputs` como `Record<string, any>`, então o `run.ts` terá um adaptador de uma linha para o `evaluateCase`, que continua tipado.
+
+## D46 — O avaliador examina o registro do turno, extraído do estado do grafo
+- **Data:** 2026-10-21
+- **Opções:** (1) o target devolve um registro estruturado do turno, tirado do estado do grafo, e o avaliador é uma função pura sobre ele · (2) o avaliador percorre a árvore do trace (`run.child_runs`).
+- **Decisão:** (1), recomendação do Claude, aprovada pelo Guilherme.
+  - **Target:** `runCase(model, inputs)` cria um runtime **novo por caso** (sessões e escalonamentos não vazam entre casos). Ele usa as mesmas portas da UI (`sendMessage`, `sendDecision`) e devolve, por turno: a resposta mostrada ao usuário, as tool calls do modelo, os resultados (os `ToolMessage` que o executor ou o `humanApproval` produziram), a proposta, a decisão e o erro controlado. Devolve também os escalonamentos registrados.
+  - **Avaliador:** uma nota (0/1) por critério, para cada um virar uma coluna no experimento, mais `pass`, que só é 1 quando todos são 1. Os comentários ficam em PT e explicam a nota (por exemplo, "omitidos: CH-103; extras ou inventados: nenhum").
+  - **Caso obrigatório (`list_open`):**
+    - `tool_called`: houve `listar_chamados` com **exatamente** `{"situacao":"aberto"}`;
+    - `tool_succeeded`: o resultado **dessa** chamada (pareado pelo `tool_call_id`) tem `ok: true`;
+    - `tool_matches_reference`: os ids retornados são os esperados no dataset;
+    - `answer_matches_tool`: os `CH-xxx` da resposta são exatamente os do resultado, sem omissão nem extra;
+    - `no_side_effects`: nenhuma proposta e nenhum registro.
+- **Motivo:** um `ToolMessage` só existe se o executor de fato executou a tool. É evidência do sistema, não texto do modelo, e é isso que o PDF pede ("só acertar o texto ou mencionar a ferramenta não basta"). A função pura é testável offline pelo mesmo grafo.
+- **Limite:** os "dados inventados" são conferidos **pelos ids**. Um título ou cliente errado no texto livre não é detectado.
+- **Testes** (`tests/evaluators.test.ts`, 19 testes): o avaliador puro, com o resultado real de `listTicketViews`, reprova os casos de consulta pulada, chamado inventado, chamado omitido, argumento errado (outra situação, sem filtro, argumento extra), consulta com falha e proposta durante a listagem. Pelo grafo, com o modelo falso: o modelo correto passa; o que pula a consulta e o que inventa o CH-105 reprovam. No caso da invenção, o guard (D40) troca a resposta, e o avaliador reprova por omissão. Mutação: 10 alterações no avaliador e no target, todas pegas pelos testes. A única que escapou na primeira rodada (ids sem fonte no caso adicional) ganhou um teste próprio.
+
+## D47 — Caso adicional (P10) e tratamento do `interrupt` na avaliação (P9)
+- **Data:** 2026-10-21
+- **Opções:** (1) fluxo real na mesma sessão, com a aprovação feita por código · (2) escalonamento semeado no store, sessão nova, só a pergunta · (3) histórico semeado à mão e depois a pergunta.
+- **Decisão:** (1), recomendação do Claude, aprovada pelo Guilherme. O caso `status_after_approval` tem dois turnos:
+  1. "Consulte o CH-101 e prepare um escalonamento se ele estiver aberto." Quando o grafo pausa, o target **faz o papel do humano** e aprova com `sendDecision`, que passa pela mesma validação de backend da UI.
+  2. "O CH-101 já foi escalonado?"
+- **P9 resolvida:** o `interrupt` é tratado aprovando ou rejeitando por código, conforme o `decisao` do caso. Sem `decisao`, a proposta é rejeitada, nada é registrado e o caso reprova em `no_side_effects`.
+- **Critérios do caso adicional:**
+  - `escalation_registered`: o pré-requisito. A proposta foi aprovada e o registro existe;
+  - `answer_matches_status`: a resposta concorda com o `escalonamento` da **última** visão do chamado em qualquer resultado de tool da conversa (`get_ticket`, `listar_chamados` ou o resultado da aprovação, D38). Se houver escalonamento, a resposta precisa afirmar e não pode negar. A negação ("não foi escalonado", "sem escalonamento") prevalece sobre a afirmação;
+  - `answer_ids_backed`: nenhum `CH-`/`ESC-` sem fonte nas tools.
+- **Motivo:** reproduz o bug real da D38 (resposta de acompanhamento a partir do histórico) e mostra aprovação e retomada dentro do experimento. Se o 7B falhar no turno 1, o caso reprova no pré-requisito, e isso é um resultado honesto.
+- **Limite:** a afirmação e a negação são reconhecidas por padrões de texto em PT, com a mesma limitação do guard. O "ESC-001" não é exigido no texto, porque no smoke o modelo respondeu certo sem citá-lo.
+
 ---
 
 ## Propostas em aberto (confirmar no passo indicado)
 
-| # | Proposta | Passo |
-|---|----------|-------|
-| P9 | Como o runner da avaliação trata um `interrupt` (casos da avaliação devem ficar em consulta). | 9a |
-| P10 | Caso adicional da avaliação: status de um chamado depois de escalonado e aprovado (D38). O avaliador confere a resposta contra o campo `escalonamento` do último resultado de tool. | 9a |
+Nenhuma no momento.
 
