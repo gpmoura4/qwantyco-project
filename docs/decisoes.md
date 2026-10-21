@@ -451,13 +451,45 @@ Formato: data · contexto · opções · decisão · motivo (e risco, quando a d
   O texto livre continua funcionando, com o guard por trás.
 - **Motivo:** as frases dos botões foram as mais estáveis nas medições com o 7B. O modelo continua no circuito (ele emite as tool calls, como o PDF exige); a UI só padroniza o pedido. Além disso, a demonstração fica reproduzível.
 
+## D42 — Envio dos traces depois da resposta (`after()` + `awaitAllCallbacks`) — resolve P8
+- **Data:** 2026-10-21
+- **Contexto:** o `@langchain/core` 1.2 envia os traces em background por padrão (só bloqueia com `LANGCHAIN_CALLBACKS_BACKGROUND=false`, `callbacks/base.js`). Num processo que fica de pé (`next dev`/`next start`) eles chegam. Num ambiente serverless, o processo pode parar logo após a resposta, e os traces se perdem. Processos curtos (smoke, eval) também terminam antes do envio.
+- **Opções:** (1) nada nas rotas, só aguardar nos scripts · (2) `after(() => awaitAllCallbacks())` nas rotas + aguardar nos scripts · (3) `LANGCHAIN_CALLBACKS_BACKGROUND=false`, que bloqueia cada callback e atrasa toda resposta.
+- **Decisão:** (2), recomendação do Claude, aprovada pelo Guilherme. `flushTracesAfterResponse()` em `src/app/api/chat/http.ts`, chamado no início das duas rotas. O `scripts/smoke.ts` aguarda `awaitAllCallbacks()` no `finally`.
+- **Motivo:** `after()` (Next 16) roda depois de a resposta sair, então o usuário não espera o envio e o envio fica garantido em qualquer ambiente. É o padrão da documentação do LangSmith para Next. Fica na borda Next, e o core continua sem importar `next`.
+- **Teste:** `tests/api.test.ts` mocka `next/server` (o `after()` lança erro fora de uma requisição do Next) e confere que as duas rotas agendam o envio.
+
+## D43 — Identidade de cada execução no trace
+- **Data:** 2026-10-21
+- **Contexto:** o R15 pede correlação por sessão e por execução. O LangGraph já copia o `thread_id` do `configurable` para a metadata de todos os runs (`PROPAGATE_TO_METADATA`), e a tela Threads do LangSmith agrupa por `thread_id`. Mas todo run raiz se chamava "LangGraph", e não dava para distinguir uma mensagem de uma retomada.
+- **Opções:** (1) só o automático · (2) `runName`, tags e metadata no `runAgent` · (3) a (2) mais um `runId` próprio devolvido pela API e mostrado na UI.
+- **Decisão:** (2), recomendação do Claude, aprovada pelo Guilherme. `traceConfig(input)` em `run.ts` deriva tudo da entrada:
+  - mensagem: `runName: "aurora_message"`, tags `["aurora", "message"]`, metadata `{ run_kind: "message" }`;
+  - retomada (`Command`): `runName: "aurora_resume"`, tags `["aurora", "resume"]`, metadata `{ run_kind: "resume", proposta_id }`.
+- **Motivo:** um lugar só (toda execução passa pelo `runAgent`), sem mudar assinaturas nem o contrato da API. Dá para filtrar por tag, e a retomada fica ligada à proposta.
+- **Teste:** `tests/tracing.test.ts` captura os runs em memória (`RunCollectorCallbackHandler`, sem rede) e confere nome, tags, metadata e `thread_id` da mensagem e da retomada. Confere também a árvore: nós, chamada ao modelo (`llm`) e run da tool sob o `executeTools`, com args e resultado.
+- **Verificado no LangSmith (smoke real, 2026-10-21):**
+  - 12 traces raiz (10 mensagens + 2 retomadas), cada retomada com `proposta_id` e o mesmo `thread_id` da conversa;
+  - a árvore mostra `callModel` → `ChatOllama` (com `ls_model_name`), `executeTools` → `get_ticket`/`listar_chamados` com entrada e saída;
+  - com `SIMULATE_TOOL_FAILURE=listar_chamados:error:2`, cada tentativa aparece como um `executeTools` com erro e a mensagem da falha, seguido do que deu certo.
+- **Como ler o trace (para a apresentação):**
+  - o `humanApproval` aparece como **erro** no trace da mensagem. É o `interrupt`: o LangGraph pausa lançando `GraphInterrupt`, e o "erro" traz a proposta exata. A raiz fica `success`;
+  - a proposta aparece na saída do `executeTools` (`pendingProposal`). O `register_escalation` nunca executa direto, por isso não tem run de tool próprio;
+  - o trace da retomada mostra o `Command` com a decisão e, na saída do `humanApproval`, a visão do chamado com `ESC-xxx`.
+
+## D44 — Segredos nos traces e testes sem rede
+- **Data:** 2026-10-21
+- **Decisão:** sem mascaramento (`LANGSMITH_HIDE_INPUTS` ou `anonymizer`); recomendação do Claude, aprovada pelo Guilherme. No `vitest.config.mts`, as quatro variáveis que ligam o tracing (`LANGSMITH_TRACING`, `LANGSMITH_TRACING_V2`, `LANGCHAIN_TRACING`, `LANGCHAIN_TRACING_V2`) ficam fixadas em `"false"`. Qualquer uma delas com `"true"` liga o tracing (`@langchain/core/dist/utils/callbacks.js`).
+- **Motivo:** os dados são fictícios, e a chave não entra no trace: o SDK só anexa variáveis `LANGSMITH_*`/`LANGCHAIN_*` e exclui `*_API_KEY` e nomes sensíveis (`langsmith/lib/utils/env.mjs`). Esconder as entradas apagaria justamente o que o PDF pede para mostrar. Fixar as variáveis no Vitest garante que nem um `export` no shell faz um teste mandar dados para fora.
+- **Verificação:** os 12 traces do smoke, com todos os runs filhos, foram baixados pela API e nenhum contém o valor da chave. A metadata tem só `LANGSMITH_TRACING`, dados do SDK e do runtime, `run_kind` e `thread_id`.
+- **Teste:** `tests/tracing.test.ts` falha se alguma das quatro variáveis não estiver `"false"`.
+
 ---
 
 ## Propostas em aberto (confirmar no passo indicado)
 
 | # | Proposta | Passo |
 |---|----------|-------|
-| P8 | Garantir o envio dos traces antes de a resposta da rota Next terminar (confirmar na documentação do LangSmith). | 8 |
 | P9 | Como o runner da avaliação trata um `interrupt` (casos da avaliação devem ficar em consulta). | 9a |
 | P10 | Caso adicional da avaliação: status de um chamado depois de escalonado e aprovado (D38). O avaliador confere a resposta contra o campo `escalonamento` do último resultado de tool. | 9a |
 

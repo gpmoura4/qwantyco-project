@@ -1,5 +1,6 @@
 // Manual smoke test against the real local model (not part of `npm test`).
 // Usage: npm run smoke   (override the model: OLLAMA_MODEL=<tag> npm run smoke)
+import { awaitAllCallbacks } from "@langchain/core/callbacks/promises";
 import { AIMessage, HumanMessage, ToolMessage, type BaseMessage } from "@langchain/core/messages";
 import { MemorySaver } from "@langchain/langgraph";
 import { decideProposal, getPendingProposal } from "@/agent/approval";
@@ -53,8 +54,10 @@ async function main() {
   console.log(`Model: ${process.env.OLLAMA_MODEL}`);
   console.log(`Simulated failures: ${process.env.SIMULATE_TOOL_FAILURE || "none"}\n`);
 
+  // Unique per smoke run, so LangSmith does not merge threads of different runs.
+  const runStamp = Date.now();
   for (const [index, { turns, decisao }] of CONVERSATIONS.entries()) {
-    const threadId = `smoke-${index}`;
+    const threadId = `smoke-${runStamp}-${index}`;
     const config = { configurable: { thread_id: threadId } };
     for (const text of turns) {
       console.log(`[user] ${text}`);
@@ -87,7 +90,10 @@ async function main() {
   console.log(`Escalonamentos registrados: ${JSON.stringify(escalationStore.list(), null, 2)}`);
 }
 
-main().catch((error) => {
-  console.error(error);
-  process.exit(1);
-});
+// Waits for the LangSmith traces to be sent before the process exits.
+main()
+  .catch((error) => {
+    console.error(error);
+    process.exitCode = 1;
+  })
+  .finally(() => awaitAllCallbacks());

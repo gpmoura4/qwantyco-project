@@ -1,5 +1,5 @@
-import { GraphRecursionError } from "@langchain/langgraph";
-import { fail, ok, type ToolResult } from "./domain/schemas";
+import { Command, GraphRecursionError } from "@langchain/langgraph";
+import { DecisionSchema, fail, ok, type ToolResult } from "./domain/schemas";
 import type { AgentGraph, AgentStateValue } from "./graph";
 
 // A new user message ({ messages }) or a resume after approval (Command).
@@ -37,6 +37,7 @@ export async function runAgent(
 ): Promise<ToolResult<AgentStateValue>> {
   try {
     const state = await graph.invoke(input, {
+      ...traceConfig(input),
       configurable: { thread_id: threadId },
       recursionLimit: limits.maxSteps,
       signal: AbortSignal.timeout(limits.maxActiveMs),
@@ -60,6 +61,25 @@ export async function runAgent(
       "Não foi possível concluir a solicitação por uma falha técnica, mesmo após novas tentativas. Nenhuma operação foi registrada.",
     );
   }
+}
+
+// How the invocation shows up in LangSmith (D43): a new user message or the resume
+// after a human decision. LangGraph already copies thread_id into the trace
+// metadata, so both kinds of a session are grouped in the same LangSmith thread.
+function traceConfig(input: RunInput) {
+  if (input instanceof Command) {
+    const decision = DecisionSchema.safeParse(input.resume);
+    return {
+      runName: "aurora_resume",
+      tags: ["aurora", "resume"],
+      metadata: { run_kind: "resume", proposta_id: decision.data?.proposta_id },
+    };
+  }
+  return {
+    runName: "aurora_message",
+    tags: ["aurora", "message"],
+    metadata: { run_kind: "message" },
+  };
 }
 
 function isAbort(error: unknown): boolean {

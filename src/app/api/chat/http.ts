@@ -1,7 +1,16 @@
+import { awaitAllCallbacks } from "@langchain/core/callbacks/promises";
+import { after } from "next/server";
 import { z } from "zod";
 import type { ErrorCode, ToolResult } from "@/agent/domain/schemas";
 
 // Translates core results into HTTP. No business rule lives here.
+
+// Sends the pending LangSmith traces once the response is out (D42): the reply is
+// not delayed, and the traces are not lost where the process stops after the
+// response (serverless).
+export function flushTracesAfterResponse(): void {
+  after(() => awaitAllCallbacks());
+}
 
 const STATUS: Partial<Record<ErrorCode, number>> = {
   INVALID_REQUEST: 400,

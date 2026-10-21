@@ -3,7 +3,7 @@
 Mostra **quem chama quem** entre os arquivos quando o assistente roda. Atualizado ao fim de cada passo.
 Os diagramas são Mermaid (renderizam no GitHub e no preview de Markdown do VS Code).
 
-**Estado atual:** Passo 7 (com ajustes D38, D40 e D41). A UI de chat (`src/app/chat.tsx`) usa a API Next.js (`/api/chat` e `/api/chat/decision`), que expõe o agente: consulta, escalonamento com aprovação humana, retry, timeout e limites. O tracing no LangSmith entra no Passo 8.
+**Estado atual:** Passo 8. A UI de chat (`src/app/chat.tsx`) usa a API Next.js (`/api/chat` e `/api/chat/decision`), que expõe o agente: consulta, escalonamento com aprovação humana, retry, timeout e limites. Toda execução gera um trace no LangSmith (seção 9).
 
 ---
 
@@ -45,14 +45,14 @@ flowchart TD
     subgraph Next["src/app/api/chat — Next.js (rotas finas)"]
         RCHAT["route.ts<br/>POST /api/chat"]
         RDEC["decision/route.ts<br/>POST /api/chat/decision"]
-        HTTPH["http.ts<br/>parseBody() · toResponse()"]
+        HTTPH["http.ts<br/>parseBody() · toResponse() · flushTracesAfterResponse()"]
     end
 
     subgraph Core["src/agent — core (nunca importa next)"]
         RUNTIME["runtime.ts<br/>getRuntime() em globalThis · createRuntime()"]
         CHAT["chat.ts<br/>sendMessage() · sendDecision() · schemas da API"]
         MODEL["model.ts<br/>createChatModel() → ChatOllama"]
-        RUN["run.ts<br/>runAgent() · DEFAULT_LIMITS"]
+        RUN["run.ts<br/>runAgent() · DEFAULT_LIMITS · traceConfig()"]
         APPROVAL["approval.ts<br/>decideProposal() · getPendingProposal() · confirmationText()"]
         FAULTS["faults.ts<br/>parseFaults() · TransientToolError"]
         GRAPH["graph.ts<br/>buildGraph() · callModel · executeTools · humanApproval"]
@@ -69,6 +69,7 @@ flowchart TD
 
     OLLAMA[("Ollama local<br/>qwen2.5:7b-instruct")]
     SAVER[("MemorySaver<br/>checkpoint por thread_id")]
+    LS[("LangSmith<br/>projeto aurora")]
 
     PAGE --> CLIENT
     CLIENT -->|"POST { sessionId, message }"| RCHAT
@@ -88,7 +89,10 @@ flowchart TD
     SMOKE -->|"buildGraph · runAgent · decideProposal"| GRAPH
     TEST -->|"rotas, createRuntime, buildGraph..."| RUNTIME
     MODEL -.->|HTTP| OLLAMA
-    RUN -->|"invoke com recursionLimit + signal"| GRAPH
+    RUN -->|"invoke com recursionLimit + signal<br/>+ runName · tags · metadata"| GRAPH
+    GRAPH -.->|"runs via callbacks (background)"| LS
+    HTTPH -.->|"after(): awaitAllCallbacks()"| LS
+    SMOKE -.->|"finally: awaitAllCallbacks()"| LS
     APPROVAL -->|getState| GRAPH
     APPROVAL -->|"runAgent(Command resume)"| RUN
     APPROVAL --> ESC
@@ -345,6 +349,33 @@ flowchart TD
 
 ---
 
+## 9. Tracing no LangSmith (o que cada execução gera)
+
+Cada chamada ao `runAgent` é um **trace raiz**. A mensagem e a retomada são traces separados, ligados pelo `thread_id` (a sessão). Por isso aparecem juntos na tela **Threads** do LangSmith.
+
+```mermaid
+flowchart TD
+    subgraph T1["Trace 1 · aurora_message · tags aurora, message"]
+        M0["aurora_message<br/>metadata: run_kind=message · thread_id"] --> M1["callModel"]
+        M1 --> M1a["ChatOllama (llm)<br/>mensagens, tool_calls, modelo"]
+        M0 --> M2["executeTools"]
+        M2 --> M2a["get_ticket (tool)<br/>args e resultado"]
+        M0 --> M3["callModel → register_escalation"]
+        M0 --> M4["executeTools<br/>saída: pendingProposal<br/>(sem run de tool)"]
+        M0 --> M5["humanApproval<br/>marcado como erro = GraphInterrupt<br/>com a proposta"]
+    end
+    subgraph T2["Trace 2 · aurora_resume · tags aurora, resume"]
+        R0["aurora_resume<br/>metadata: run_kind=resume · proposta_id · thread_id<br/>entrada: Command(resume: decisão)"] --> R1["humanApproval<br/>saída: visão do chamado com ESC-xxx<br/>+ confirmação determinística"]
+    end
+    T1 -. "mesmo thread_id (sessão)" .- T2
+```
+
+- **Falhas:** cada tentativa com erro aparece como um run `executeTools` com status de erro e a mensagem (ex.: "Falha simulada em listar_chamados (tentativa 1)"), seguido da tentativa que deu certo.
+- **Envio:** os runs saem em background durante a execução. Nas rotas, `after(() => awaitAllCallbacks())` garante o envio depois da resposta (D42). No smoke, o `finally` aguarda antes de o processo sair.
+- **Segredos:** a chave do LangSmith não entra nos traces (D44). Os testes nunca enviam traces.
+
+---
+
 ## Histórico de atualizações
 
 | Passo | O que mudou no fluxo |
@@ -357,3 +388,4 @@ flowchart TD
 | 7 | UI: `page.tsx` (Server Component) renderiza `chat.tsx` (`'use client'`), que chama as rotas com `fetch`, mostra o cartão da proposta e bloqueia o envio enquanto há proposta pendente. |
 | 7 (ajuste) | Tools de leitura criadas por runtime (`createTools(store)`) e devolvendo a visão chamado + `escalonamento`; após a aprovação, o `ToolMessage` traz a visão atualizada (D38). Prompt reorganizado em passos. |
 | 7 (ajuste 2) | Nó `checkReply` (`guard.ts`) após a resposta final: correção única ou mensagem honesta quando a resposta afirma ação não feita, cita dado sem fonte ou ignora pedido explícito de escalonamento (D40). UI com "Como usar" e ações rápidas (D41). |
+| 8 | Tracing: `runAgent` nomeia e etiqueta cada execução (`aurora_message`/`aurora_resume`, D43); as rotas agendam `awaitAllCallbacks()` com `after()` e o smoke aguarda no `finally` (D42); nova seção 9. |

@@ -1,7 +1,8 @@
 import { randomUUID } from "node:crypto";
 import { AIMessage } from "@langchain/core/messages";
 import { fakeModel } from "@langchain/core/testing";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { after } from "next/server";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Faults } from "@/agent/faults";
 import type { Limits } from "@/agent/run";
 import { createRuntime, setRuntimeForTests, type AgentRuntime } from "@/agent/runtime";
@@ -10,6 +11,9 @@ import { POST as postMessage } from "@/app/api/chat/route";
 
 // API tests: the Next.js route handlers are plain functions (Request → Response),
 // called directly with a runtime that uses a fake model. No server, no network.
+
+// after() only works inside a Next.js request; here it just records the callback.
+vi.mock("next/server", () => ({ after: vi.fn() }));
 
 const FAST: Limits = {
   toolTimeoutMs: 50,
@@ -31,7 +35,10 @@ function useRuntime(faults: Faults = {}) {
 }
 
 beforeEach(() => useRuntime());
-afterEach(() => setRuntimeForTests(undefined));
+afterEach(() => {
+  setRuntimeForTests(undefined);
+  vi.mocked(after).mockClear();
+});
 
 async function call(handler: (request: Request) => Promise<Response>, body: unknown) {
   const response = await handler(
@@ -166,6 +173,17 @@ describe("POST /api/chat/decision", () => {
     });
 
     expect(res.status).toBe(400);
+  });
+});
+
+describe("LangSmith traces are flushed after the response (D42)", () => {
+  it("both routes schedule the flush with after()", async () => {
+    model.respond(new AIMessage("Olá!"));
+    await call(postMessage, { sessionId: randomUUID(), message: "Oi" });
+    expect(after).toHaveBeenCalledTimes(1);
+
+    await call(postDecision, { sessionId: randomUUID(), proposta_id: "prop-1", decisao: "aprovar" });
+    expect(after).toHaveBeenCalledTimes(2);
   });
 });
 
