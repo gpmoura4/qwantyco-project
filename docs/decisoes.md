@@ -556,6 +556,31 @@ Formato: data · contexto · opções · decisão · motivo (e risco, quando a d
   Os nomes e as descrições deixam claro que não é o agente.
 - **Verificado:** `demo-pula-consulta` deu `tool_called`=0 e `pass`=0. `demo-inventa-chamado` deu `answer_matches_tool`=0 ("extras ou inventados: CH-105") e `pass`=0. O mesmo resultado é conferido offline em `tests/evaluators.test.ts`.
 
+## D51 — Caso de avaliação: busca do chamado pelo nome do cliente
+- **Data:** 2026-10-22
+- **Contexto (achado do Guilherme testando a UI):** "qual o chamado da Padaria?" não trazia o chamado certo. Nenhuma tool busca por cliente: o `get_ticket` exige o id, e o `listar_chamados` só filtra por `situacao`. O agente precisa listar e achar o chamado no resultado.
+- **Sondagem com o modelo real** (antes de qualquer mudança, tracing desligado):
+  - "qual o chamado da Padaria?" (3×): `listar_chamados({"situacao":"aberto"})` e uma resposta descrevendo **os dois** abertos, sem dizer qual é e sem id;
+  - "Qual é o chamado da Padaria Pão Dourado?" (3×): `get_ticket(CH-101)` e uma resposta certa, **mas por coincidência**;
+  - "Qual é o chamado da Transportadora Rota Sul?" (2×): `get_ticket(CH-101)` e a resposta **"O chamado da Transportadora Rota Sul é CH-101"**, um dado falso;
+  - "Qual é o chamado da Clínica Vida Plena?" (2×): lista só os abertos e não encontra o CH-102 (resolvido).
+- **Causa provável do chute:** a descrição da tool `get_ticket` usa "por exemplo, CH-101", e o modelo copia o id do exemplo. O guard (D40) não pega, porque o CH-101 veio de uma tool. Só o **cliente** associado está errado (o limite da D46).
+- **Decisão (Guilherme decidiu adicionar; o Claude recomendou os dois casos e os critérios):** um tipo novo, `lookup_by_client`, com o gabarito `{ cliente, expected_id }`, e dois casos no dataset:
+  - "qual o chamado da Padaria?" → CH-101 (a frase da UI);
+  - "Qual é o chamado da Transportadora Rota Sul?" → CH-103 (detecta o chute do id do exemplo).
+- **Critérios:**
+  - `ticket_found_by_tool`: algum resultado de tool trouxe o id esperado **com o cliente perguntado**;
+  - `answer_identifies_ticket`: a resposta cita o id esperado e **nenhum outro** `CH-`;
+  - `answer_ids_backed`;
+  - `no_side_effects`.
+- **Expectativa:** os dois casos **reprovam** com o modelo e as tools atuais. O objetivo é registrar a falha medida.
+- **Correção: não corrigir agora (decisão do Guilherme).** A limitação fica sinalizada no README e medida na avaliação. Caminhos possíveis, para uma próxima iteração, cada um a ser medido com `npm run eval` antes e depois:
+  - trocar o exemplo `CH-101` da descrição do `get_ticket` por um neutro (`CH-xxx`), o que deve acabar com o chute;
+  - um argumento opcional `cliente` no `listar_chamados`;
+  - uma regra no guard que confira se o cliente citado na resposta bate com o do resultado da tool.
+- **Por que na UI pode "não acontecer":** a avaliação começa sempre numa sessão nova e com frases fixas. Na UI, um histórico com os chamados já listados, ou o nome completo "Padaria Pão Dourado" (que coincide com o id chutado), esconde o defeito. Para reproduzir: "Nova conversa" e, como primeira mensagem, "Qual é o chamado da Transportadora Rota Sul?".
+- **Testes:** 11 novos em `tests/evaluators.test.ts`. O avaliador puro é exercitado com os resultados reais do domínio: resposta certa; "lista todos"; "não diz qual"; id chutado; referência com cliente de outro id; id sem fonte; proposta durante a busca. Pelo grafo, com o modelo falso: listar e nomear certo passa; o id chutado **passa pelo guard, mas não pelo avaliador**. Mutação: 5 alterações, todas pegas. A de "id sem fonte" só passou a ser pega depois de ganhar um teste próprio.
+
 ---
 
 ## Propostas em aberto (confirmar no passo indicado)

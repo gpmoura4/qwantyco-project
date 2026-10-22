@@ -405,6 +405,7 @@ Cada run do experimento contém o trace do agente aninhado (`aurora_message`, `h
 - O avaliador nunca lê a "opinião" do modelo sobre o que fez. Ele lê os `ToolMessage`, que só existem se o executor executou a tool, pareados com a tool call pelo `tool_call_id`.
 - **Caso obrigatório:** `tool_called` (exatamente `{"situacao":"aberto"}`), `tool_succeeded`, `tool_matches_reference`, `answer_matches_tool` (sem omissão nem extra) e `no_side_effects`.
 - **Caso adicional (P10):** `escalation_registered` (pré-requisito), `answer_matches_status` (contra o `escalonamento` da última visão do chamado) e `answer_ids_backed`.
+- **Busca por cliente (D51):** `ticket_found_by_tool` (o id esperado veio de uma tool com o cliente perguntado), `answer_identifies_ticket` (só o id esperado), `answer_ids_backed` e `no_side_effects`.
 
 ---
 
@@ -423,3 +424,4 @@ Cada run do experimento contém o trace do agente aninhado (`aurora_message`, `h
 | 8 | Tracing: `runAgent` nomeia e etiqueta cada execução (`aurora_message`/`aurora_resume`, D43); as rotas agendam `awaitAllCallbacks()` com `after()` e o smoke aguarda no `finally` (D42); nova seção 9. |
 | 9a | `evals/`: dataset, target (`runCase`, runtime novo por caso, aprovação por código) e avaliador por código (`evaluateCase`), testados offline; nova seção 10 (D45–D47). |
 | 9b | `evals/run.ts` (`npm run eval` e `eval:demo`), `evals/sync.ts` (dataset sincronizado) e `evals/demo.ts` (demonstrações do avaliador); seção 10 atualizada (D48–D50). |
+| 9b (ajuste) | Tipo `lookup_by_client` no avaliador e dois casos novos no dataset (Padaria e Transportadora), vindos de uma falha achada na UI (D51). |

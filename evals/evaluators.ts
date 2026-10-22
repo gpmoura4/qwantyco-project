@@ -38,6 +38,21 @@ const sameSet = (a: string[], b: string[]) =>
 
 const list = (ids: string[]) => (ids.length ? ids.join(", ") : "nenhum");
 
+// Ticket views returned by successful tool results, in order (a list or a single ticket).
+const ticketViews = (outputs: CaseOutputs): TicketView[] =>
+  outputs.turns.flatMap((t) =>
+    t.tool_results.flatMap(({ result }) => {
+      if (!result.ok) return [];
+      return (Array.isArray(result.data) ? result.data : [result.data]) as TicketView[];
+    }),
+  );
+
+// CH-/ESC- ids in the answer that no tool result of the conversation contains.
+function unbackedIds(outputs: CaseOutputs, answer: string): string[] {
+  const known = new Set(outputs.turns.flatMap((t) => idsIn(JSON.stringify(t.tool_results), ANY_IDS)));
+  return idsIn(answer, ANY_IDS).filter((id) => !known.has(id));
+}
+
 export function evaluateCase({
   outputs,
   referenceOutputs,
@@ -45,9 +60,14 @@ export function evaluateCase({
   outputs: CaseOutputs;
   referenceOutputs: CaseReference;
 }): { results: Score[] } {
-  return referenceOutputs.kind === "list_open"
-    ? evaluateListOpen(outputs, referenceOutputs.expected_ids)
-    : evaluateStatusAfterApproval(outputs, referenceOutputs.chamado_id);
+  switch (referenceOutputs.kind) {
+    case "list_open":
+      return evaluateListOpen(outputs, referenceOutputs.expected_ids);
+    case "status_after_approval":
+      return evaluateStatusAfterApproval(outputs, referenceOutputs.chamado_id);
+    case "lookup_by_client":
+      return evaluateLookupByClient(outputs, referenceOutputs.cliente, referenceOutputs.expected_id);
+  }
 }
 
 // Mandatory case: listar_chamados really ran with {"situacao":"aberto"}, it
@@ -115,14 +135,9 @@ function evaluateStatusAfterApproval(outputs: CaseOutputs, chamadoId: string): {
 
   // Latest view of the ticket in any tool result of the conversation (get_ticket,
   // listar_chamados or the approval result, which has the same shape).
-  const views = outputs.turns.flatMap((t) =>
-    t.tool_results.flatMap(({ result }) => {
-      if (!result.ok) return [];
-      const data = Array.isArray(result.data) ? result.data : [result.data];
-      return (data as TicketView[]).filter((v) => v?.id === chamadoId);
-    }),
-  );
-  const latest = views.at(-1);
+  const latest = ticketViews(outputs)
+    .filter((v) => v?.id === chamadoId)
+    .at(-1);
   const escalated = Boolean(latest?.escalonamento);
 
   const last = outputs.turns.at(-1);
@@ -130,8 +145,7 @@ function evaluateStatusAfterApproval(outputs: CaseOutputs, chamadoId: string): {
   const says = NEGATED.test(answer) ? "não escalonado" : AFFIRMED.test(answer) ? "escalonado" : "não diz";
   const agrees = latest !== undefined && (escalated ? says === "escalonado" : says !== "escalonado");
 
-  const known = new Set(outputs.turns.flatMap((t) => idsIn(JSON.stringify(t.tool_results), ANY_IDS)));
-  const unknown = idsIn(answer, ANY_IDS).filter((id) => !known.has(id));
+  const unknown = unbackedIds(outputs, answer);
 
   return withPass([
     score(
@@ -154,6 +168,46 @@ function evaluateStatusAfterApproval(outputs: CaseOutputs, chamadoId: string): {
       "answer_ids_backed",
       unknown.length === 0,
       `ids sem fonte nas ferramentas: ${list(unknown)}`,
+    ),
+  ]);
+}
+
+// Lookup by client name (D51): a tool result must have brought the expected ticket
+// with that client (the source), and the answer must name exactly that ticket.
+// Catches "lists every open ticket without saying which one" and a guessed id
+// ("the Transportadora ticket is CH-101" after reading CH-101 of the Padaria).
+function evaluateLookupByClient(
+  outputs: CaseOutputs,
+  cliente: string,
+  expectedId: string,
+): { results: Score[] } {
+  const views = ticketViews(outputs);
+  const found = views.some((v) => v?.id === expectedId && v.cliente === cliente);
+  const seen = [...new Set(views.map((v) => `${v?.id} (${v?.cliente})`))];
+
+  const answer = outputs.turns.at(-1)?.answer ?? "";
+  const answered = idsIn(answer, TICKET_IDS);
+  const unknown = unbackedIds(outputs, answer);
+  const proposals = outputs.turns.filter((t) => t.proposal).length;
+
+  return withPass([
+    score(
+      "ticket_found_by_tool",
+      found,
+      found
+        ? `${expectedId} de ${cliente} veio de uma ferramenta`
+        : `nenhuma ferramenta trouxe ${expectedId} de ${cliente}; vistos: ${seen.join(", ") || "nenhum"}`,
+    ),
+    score(
+      "answer_identifies_ticket",
+      answered.length === 1 && answered[0] === expectedId,
+      `esperado: só ${expectedId}; na resposta: ${list(answered)}`,
+    ),
+    score("answer_ids_backed", unknown.length === 0, `ids sem fonte nas ferramentas: ${list(unknown)}`),
+    score(
+      "no_side_effects",
+      proposals === 0 && outputs.escalations.length === 0,
+      `propostas: ${proposals}; escalonamentos registrados: ${outputs.escalations.length}`,
     ),
   ]);
 }

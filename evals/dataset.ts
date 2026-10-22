@@ -16,7 +16,10 @@ export type CaseReference =
   | { kind: "list_open"; expected_ids: string[] }
   // Additional case (P10, D38): after an approved escalation, the status answer
   // must agree with the `escalonamento` field of the latest tool result.
-  | { kind: "status_after_approval"; chamado_id: string };
+  | { kind: "status_after_approval"; chamado_id: string }
+  // Lookup by client name (D51): no tool searches by client, so the agent must
+  // find the ticket in a tool result. Found while testing the UI.
+  | { kind: "lookup_by_client"; cliente: string; expected_id: string };
 
 export type EvalCase = { inputs: CaseInputs; reference: CaseReference };
 
@@ -34,5 +37,18 @@ export const CASES: EvalCase[] = [
       decisao: "aprovar",
     },
     reference: { kind: "status_after_approval", chamado_id: "CH-101" },
+  },
+  {
+    inputs: { messages: ["qual o chamado da Padaria?"] },
+    reference: { kind: "lookup_by_client", cliente: "Padaria Pão Dourado", expected_id: "CH-101" },
+  },
+  {
+    // Catches a guessed id: get_ticket's description uses CH-101 as its example.
+    inputs: { messages: ["Qual é o chamado da Transportadora Rota Sul?"] },
+    reference: {
+      kind: "lookup_by_client",
+      cliente: "Transportadora Rota Sul",
+      expected_id: "CH-103",
+    },
   },
 ];

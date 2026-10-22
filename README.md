@@ -120,14 +120,20 @@ O código fica em [`evals/`](evals/). Precisa do Ollama rodando e de `LANGSMITH_
 |---|---|---|
 | Obrigatório | "Liste todos os chamados abertos." | `listar_chamados` executada com `{"situacao":"aberto"}`, com sucesso; resposta com CH-101 e CH-103, sem omissões, extras ou invenções |
 | Adicional | "Consulte o CH-101 e prepare um escalonamento se ele estiver aberto." → **aprovação** → "O CH-101 já foi escalonado?" | Escalonamento registrado; resposta de acordo com o campo `escalonamento` do último resultado de tool, sem ids sem fonte |
+| Busca por cliente | "qual o chamado da Padaria?" e "Qual é o chamado da Transportadora Rota Sul?" | O chamado esperado (CH-101 e CH-103) veio de uma tool com aquele cliente, e a resposta cita só ele |
 
-O caso adicional reproduz um problema real encontrado durante o desenvolvimento: depois de aprovar, o modelo dizia que o chamado "ainda não foi escalonado" ([D38](docs/decisoes.md)).
+Os casos adicionais reproduzem problemas reais encontrados testando a UI:
+- depois de aprovar, o modelo dizia que o chamado "ainda não foi escalonado" ([D38](docs/decisoes.md));
+- perguntando pelo cliente, ele não identificava o chamado ou **chutava o CH-101**, o id usado como exemplo na descrição do `get_ticket` ([D51](docs/decisoes.md)).
+
+O dataset cresce assim: uma falha observada vira um caso, a falha é medida, corrigida e medida de novo.
 
 **Target** (`evals/target.ts`): roda cada caso num runtime novo, pelas mesmas portas de entrada da UI. Quando o grafo pausa para aprovação, o target faz o papel do humano e decide por código, passando pela mesma validação de backend. Ele devolve um registro do que **de fato executou**, tirado do estado do grafo: tool calls, resultados das tools, proposta, decisão e escalonamentos registrados.
 
 **Avaliador por código** (`evals/evaluators.ts`): dá uma nota 0/1 por critério, com comentário, mais `pass`.
 - **Obrigatório:** `tool_called`, `tool_succeeded`, `tool_matches_reference`, `answer_matches_tool` e `no_side_effects`.
 - **Adicional:** `escalation_registered`, `answer_matches_status` e `answer_ids_backed`.
+- **Busca por cliente:** `ticket_found_by_tool`, `answer_identifies_ticket`, `answer_ids_backed` e `no_side_effects`.
 
 O avaliador lê os resultados das tools, que só existem se o executor executou a tool. Por isso, uma resposta com o texto certo mas **sem a consulta reprova**, e uma resposta que **inventa um chamado reprova**. As duas situações são demonstradas offline em `tests/evaluators.test.ts` e no LangSmith com `npm run eval:demo`.
 
@@ -156,7 +162,7 @@ O avaliador lê os resultados das tools, que só existem se o executor executou 
 3. **Clique numa linha:** abre o trace completo do agente naquela execução, com modelo, nós, tool, argumentos e resultado, e no caso adicional também a aprovação e a retomada.
 4. **Compare** o experimento real com os de demonstração: o real fica com `pass` = 1; `demo-pula-consulta` reprova em `tool_called`, e `demo-inventa-chamado` em `answer_matches_tool`.
 
-**Resultado de referência** (2026-10-21): **6/6 `pass`** (os 2 casos × 3 repetições). No caso adicional, a resposta "já foi escalonado" veio do resultado da aprovação no histórico, sem nova consulta. Com `temperature: 0`, as repetições saíram idênticas. Isso mostra que estes cenários são estáveis, mas não que o modelo seja robusto a texto livre (ver Limitações).
+**Resultado de referência** (2026-10-21, com os 2 primeiros casos): **6/6 `pass`** (2 casos × 3 repetições). Os casos de busca por cliente (D51) entraram depois. Na sondagem com o modelo real, eles **falham**: é o registro do problema antes da correção. No caso adicional, a resposta "já foi escalonado" veio do resultado da aprovação no histórico, sem nova consulta. Com `temperature: 0`, as repetições saíram idênticas. Isso mostra que estes cenários são estáveis, mas não que o modelo seja robusto a texto livre (ver Limitações).
 
 ---
 
@@ -209,7 +215,7 @@ docs/               plano, requisitos, decisões e fluxo
 
 ## Decisões
 
-Todas as decisões, com contexto, opções e motivo, estão em [`docs/decisoes.md`](docs/decisoes.md) (D01–D50). As principais:
+Todas as decisões, com contexto, opções e motivo, estão em [`docs/decisoes.md`](docs/decisoes.md) (D01–D51). As principais:
 
 - **LLM local via Ollama** (D07, D25, D39): sem custo e sem chave de API. O `qwen2.5:7b` foi escolhido num smoke comparativo de tool calling.
 - **Executor próprio em vez de `ToolNode`/`createAgent`** (D23): a validação de allowlist, argumentos, regras e saída fica explícita e num lugar só.
@@ -230,5 +236,6 @@ Todas as decisões, com contexto, opções e motivo, estão em [`docs/decisoes.m
 - **Estado em memória:** sessões (`MemorySaver`) e escalonamentos se perdem quando o servidor reinicia. É um processo só, sem banco nem fila.
 - **Sem autenticação:** a sessão é um UUID gerado pelo navegador. O backend isola sessões entre si, mas não identifica usuários.
 - **Uma proposta pendente por vez** em cada sessão; mensagens novas são recusadas (409) até a decisão.
-- **Avaliação com 2 casos e frases fixas:** o 6/6 vale para esses cenários. O avaliador confere os "dados inventados" pelos ids de chamado e escalonamento; um título ou cliente errado no texto livre não é detectado ([D46](docs/decisoes.md)).
+- **Busca por cliente (conhecida, medida e não corrigida):** nenhuma tool busca por nome de cliente. Numa conversa nova, o 7B tende a listar todos os chamados sem dizer qual é o do cliente, ou a **chutar o CH-101**, o id usado como exemplo na descrição do `get_ticket`. Exemplo: "Qual é o chamado da Transportadora Rota Sul?" → "é o CH-101" (o certo é o CH-103). Os dois casos de busca por cliente da avaliação registram essa falha. Correções possíveis estão em [D51](docs/decisoes.md).
+- **Avaliação com poucos casos e frases fixas:** o resultado vale para esses cenários. O avaliador confere os "dados inventados" pelos ids de chamado e escalonamento; um título ou cliente errado no texto livre não é detectado ([D46](docs/decisoes.md)).
 - Só dados fictícios; sem deploy público.

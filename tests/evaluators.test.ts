@@ -1,7 +1,7 @@
 import { AIMessage } from "@langchain/core/messages";
 import { fakeModel } from "@langchain/core/testing";
 import { describe, expect, it } from "vitest";
-import { createEscalationStore, listTicketViews } from "@/agent/domain/escalations";
+import { createEscalationStore, getTicketView, listTicketViews } from "@/agent/domain/escalations";
 import { fail, type Proposal } from "@/agent/domain/schemas";
 import { CASES, type CaseReference } from "../evals/dataset";
 import { DEMOS } from "../evals/demo";
@@ -13,7 +13,7 @@ import { runCase, type CaseOutputs, type TurnRecord } from "../evals/target";
 // and fails one that skips the query, invents or omits a ticket. Graph cases go
 // through the same graph and executor with a fake model; no LangSmith, no network.
 
-const [LIST_CASE, STATUS_CASE] = CASES;
+const [LIST_CASE, STATUS_CASE, PADARIA_CASE, TRANSPORTADORA_CASE] = CASES;
 
 const scores = (outputs: CaseOutputs, reference: CaseReference) =>
   Object.fromEntries(
@@ -50,6 +50,8 @@ describe("Dataset", () => {
     expect(LIST_CASE.inputs.messages).toEqual(["Liste todos os chamados abertos."]);
     expect(LIST_CASE.reference).toEqual({ kind: "list_open", expected_ids: ["CH-101", "CH-103"] });
     expect(STATUS_CASE.reference.kind).toBe("status_after_approval");
+    expect(PADARIA_CASE.inputs.messages).toEqual(["qual o chamado da Padaria?"]);
+    expect(TRANSPORTADORA_CASE.reference).toMatchObject({ kind: "lookup_by_client", expected_id: "CH-103" });
   });
 });
 
@@ -260,13 +262,133 @@ describe("Dataset sync plan (D48)", () => {
       { id: "ex-old", inputs: { messages: ["Caso antigo."] }, outputs: { kind: "list_open" } },
     ];
 
-    expect(planSync(CASES, existing)).toEqual({ toCreate: [CASES[1]], toDelete: ["ex-old"] });
+    expect(planSync(CASES, existing)).toEqual({ toCreate: CASES.slice(1), toDelete: ["ex-old"] });
   });
 
   it("replaces a case whose reference changed, and removes duplicates", () => {
     const changed = { ...asStored("ex-0", CASES[0]), outputs: { kind: "list_open", expected_ids: ["CH-101"] } };
     const existing = [changed, asStored("ex-1", CASES[1]), asStored("ex-1-dup", CASES[1])];
 
-    expect(planSync(CASES, existing)).toEqual({ toCreate: [CASES[0]], toDelete: ["ex-0", "ex-1-dup"] });
+    expect(planSync(CASES, existing)).toEqual({
+      toCreate: [CASES[0], ...CASES.slice(2)],
+      toDelete: ["ex-0", "ex-1-dup"],
+    });
+  });
+});
+
+describe("Lookup by client name (lookup_by_client, D51)", () => {
+  const store = createEscalationStore();
+  // Real tool results from the domain.
+  const listAll = listTicketViews(store, {});
+  const ch101 = getTicketView(store, { chamado_id: "CH-101" });
+
+  const lookupOutputs = (
+    answer: string,
+    call: { name: string; args: Record<string, unknown> },
+    result: TurnRecord["tool_results"][number]["result"],
+  ): CaseOutputs => ({
+    turns: [
+      {
+        message: "qual o chamado?",
+        answer,
+        tool_calls: [{ id: "call-1", ...call }],
+        tool_results: [{ tool_call_id: "call-1", name: call.name, result }],
+        proposal: null,
+        decision: null,
+        error: null,
+      },
+    ],
+    escalations: [],
+  });
+  const listCall = { name: "listar_chamados", args: {} };
+
+  it("passes when the ticket came from a tool and the answer names only it", () => {
+    const outputs = lookupOutputs("O chamado da Padaria Pão Dourado é o CH-101.", listCall, listAll);
+
+    expect(scores(outputs, PADARIA_CASE.reference)).toEqual({
+      ticket_found_by_tool: 1,
+      answer_identifies_ticket: 1,
+      answer_ids_backed: 1,
+      no_side_effects: 1,
+      pass: 1,
+    });
+  });
+
+  it.each([
+    ["lists every ticket", "Há o CH-101 (Padaria) e o CH-103 (Transportadora)."],
+    ["does not say which one", "Encontrei dois chamados abertos, um da Padaria e outro da Transportadora."],
+  ])("fails an answer that %s", (_case, answer) => {
+    const outputs = lookupOutputs(answer, listCall, listAll);
+
+    expect(scores(outputs, PADARIA_CASE.reference)).toMatchObject({
+      ticket_found_by_tool: 1,
+      answer_identifies_ticket: 0,
+      pass: 0,
+    });
+  });
+
+  it("fails a guessed id: get_ticket(CH-101) answered as the Transportadora ticket", () => {
+    const outputs = lookupOutputs(
+      "O chamado da Transportadora Rota Sul é CH-101.",
+      { name: "get_ticket", args: { chamado_id: "CH-101" } },
+      ch101,
+    );
+
+    expect(scores(outputs, TRANSPORTADORA_CASE.reference)).toMatchObject({
+      ticket_found_by_tool: 0,
+      answer_identifies_ticket: 0,
+      pass: 0,
+    });
+  });
+
+  it("checks the client too: a reference whose id belongs to another client fails", () => {
+    const outputs = lookupOutputs("O chamado da Padaria Pão Dourado é o CH-103.", listCall, listAll);
+    const wrongReference: CaseReference = {
+      kind: "lookup_by_client",
+      cliente: "Padaria Pão Dourado",
+      expected_id: "CH-103",
+    };
+
+    expect(scores(outputs, wrongReference)).toMatchObject({ ticket_found_by_tool: 0, pass: 0 });
+  });
+
+  it("fails an answer that cites a ticket no tool returned", () => {
+    const outputs = lookupOutputs("É o CH-101, ligado ao CH-105.", listCall, listAll);
+
+    expect(scores(outputs, PADARIA_CASE.reference)).toMatchObject({ answer_ids_backed: 0, pass: 0 });
+  });
+
+  it("fails a lookup that proposed an escalation", () => {
+    const outputs = lookupOutputs("O chamado da Padaria Pão Dourado é o CH-101.", listCall, listAll);
+    outputs.turns[0].proposal = { id: "prop-1", chamado_id: "CH-101", resumo: "r", justificativa: "j" };
+
+    expect(scores(outputs, PADARIA_CASE.reference)).toMatchObject({ no_side_effects: 0, pass: 0 });
+  });
+
+  it("through the graph: listing and naming the right ticket passes", async () => {
+    const model = fakeModel()
+      .respondWithTools([{ name: "listar_chamados", args: {} }])
+      .respond(new AIMessage("O chamado da Transportadora Rota Sul é o CH-103."));
+
+    const outputs = await runCase(model, TRANSPORTADORA_CASE.inputs);
+
+    expect(scores(outputs, TRANSPORTADORA_CASE.reference).pass).toBe(1);
+  });
+
+  it("through the graph: the guessed id passes the reply guard but not the evaluator", async () => {
+    // The id CH-101 did come from a tool, so the guard (D40) lets it through; only
+    // the client check of the evaluator sees that it is the wrong ticket.
+    const model = fakeModel()
+      .respondWithTools([{ name: "get_ticket", args: { chamado_id: "CH-101" } }])
+      .respond(new AIMessage("O chamado da Transportadora Rota Sul é CH-101."));
+
+    const outputs = await runCase(model, TRANSPORTADORA_CASE.inputs);
+
+    expect(outputs.turns[0].answer).toBe("O chamado da Transportadora Rota Sul é CH-101.");
+    expect(scores(outputs, TRANSPORTADORA_CASE.reference)).toMatchObject({
+      ticket_found_by_tool: 0,
+      answer_identifies_ticket: 0,
+      pass: 0,
+    });
   });
 });
