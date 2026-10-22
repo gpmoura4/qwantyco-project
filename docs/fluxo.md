@@ -3,7 +3,7 @@
 Mostra **quem chama quem** entre os arquivos quando o assistente roda. Atualizado ao fim de cada passo.
 Os diagramas são Mermaid (renderizam no GitHub e no preview de Markdown do VS Code).
 
-**Estado atual:** Passo 9a. A UI de chat (`src/app/chat.tsx`) usa a API Next.js (`/api/chat` e `/api/chat/decision`), que expõe o agente: consulta, escalonamento com aprovação humana, retry, timeout e limites. Toda execução gera um trace no LangSmith (seção 9). A avaliação (`evals/`) roda os casos pelas mesmas portas de entrada e confere o que de fato executou (seção 10): offline nos testes e no LangSmith com `npm run eval`.
+**Estado atual:** Passo 10 (revisão final). A UI de chat (`src/app/chat.tsx`) usa a API Next.js (`/api/chat` e `/api/chat/decision`), que expõe o agente: consulta, escalonamento com aprovação humana, retry, timeout e limites. Toda execução gera um trace no LangSmith (seção 9). A avaliação (`evals/`) roda os casos pelas mesmas portas de entrada e confere o que de fato executou (seção 10): offline nos testes e no LangSmith com `npm run eval`.
 
 ---
 
@@ -425,3 +425,4 @@ Cada run do experimento contém o trace do agente aninhado (`aurora_message`, `h
 | 9a | `evals/`: dataset, target (`runCase`, runtime novo por caso, aprovação por código) e avaliador por código (`evaluateCase`), testados offline; nova seção 10 (D45–D47). |
 | 9b | `evals/run.ts` (`npm run eval` e `eval:demo`), `evals/sync.ts` (dataset sincronizado) e `evals/demo.ts` (demonstrações do avaliador); seção 10 atualizada (D48–D50). |
 | 9b (ajuste) | Tipo `lookup_by_client` no avaliador e dois casos novos no dataset (Padaria e Transportadora), vindos de uma falha achada na UI (D51). |
+| 10 | Sem mudança de código: revisão contra o PDF e o `requisitos.md`, e README final. |

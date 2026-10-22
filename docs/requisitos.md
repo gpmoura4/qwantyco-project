@@ -44,11 +44,11 @@ Status: ⬜ pendente · 🟨 parcial · ✅ atendido
 
 | ID  | Entregável | Passo | Status |
 |-----|------------|-------|--------|
-| E01 | Repositório no GitHub com código, lockfile, versão do Node e `.env.example` sem segredos. | 1, 10 | 🟨 |
-| E02 | README com instalação, comandos, testes offline, avaliação, fluxo, decisões e limitações. | 1 (esqueleto), 10 | 🟨 |
+| E01 | Repositório no GitHub com código, lockfile, versão do Node e `.env.example` sem segredos. | 1, 10 | ✅ |
+| E02 | README com instalação, comandos, testes offline, avaliação, fluxo, decisões e limitações. | 1 (esqueleto), 10 | ✅ |
 | E03 | Projeto, dataset e experimento mantidos na conta própria do LangSmith. | 8, 9b | ✅ |
-| E04 | Apresentação: navegar no LangSmith (fluxo, falha, aprovação, avaliação), discutir decisões e o caso adicional, alteração ao vivo, possível explicação em inglês. | — | ⬜ |
-| E05 | Só dados fictícios; interface simples; deploy público não é necessário. | todos | ⬜ |
+| E04 | Apresentação: navegar no LangSmith (fluxo, falha, aprovação, avaliação), discutir decisões e o caso adicional, alteração ao vivo, possível explicação em inglês. | — | 🟨 |
+| E05 | Só dados fictícios; interface simples; deploy público não é necessário. | todos | ✅ |
 
 ## Bônus (opcional)
 

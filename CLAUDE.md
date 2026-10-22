@@ -37,7 +37,7 @@ npm run test:watch # testes em modo watch
 npm run lint       # ESLint
 npm run smoke      # smoke manual com o modelo real (Ollama); não faz parte do npm test
 # falhas simuladas: SIMULATE_TOOL_FAILURE=listar_chamados:error:2 npm run smoke  (modos: error | timeout | invalid_output)
-npm run eval       # experimento no LangSmith com o modelo real (3 repetições por caso; ~1,5 min)
+npm run eval       # experimento no LangSmith com o modelo real (4 casos × 3 repetições; ~2,5 min)
 npm run eval:demo  # experimentos de demonstração do avaliador (respostas fabricadas, sem modelo)
 ```
 - Comentários em linha separada nos blocos de comando: no zsh interativo, `#` na mesma linha vira argumento.

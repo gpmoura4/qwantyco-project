@@ -4,7 +4,23 @@ Desafio técnico Qwantyco. Assistente de suporte da empresa fictícia **Aurora**
 
 **Stack:** TypeScript 5.9 (`strict`) · Next.js 16 (App Router) · React 19 · LangGraph 1.5 · LangChain Core 1.2 · Zod 4 · Vitest 5 · LangSmith · LLM local via Ollama (`qwen2.5:7b-instruct-q4_K_M`).
 
-> **Estado:** núcleo, aprovação humana, falhas e limites, API, UI de chat e tracing no LangSmith estão prontos e testados. A **avaliação** (dataset, avaliador por código e experimento com o modelo real) roda no LangSmith. Falta a revisão final. Andamento por passo em [`docs/plano.md`](docs/plano.md); requisitos e status em [`docs/requisitos.md`](docs/requisitos.md).
+> **Estado:** todos os itens obrigatórios do desafio estão implementados, testados e revisados (ver [Mapa do desafio](#mapa-do-desafio)). O bônus (Assistants + RAG) não foi implementado. Andamento por passo em [`docs/plano.md`](docs/plano.md); requisitos e status em [`docs/requisitos.md`](docs/requisitos.md).
+
+---
+
+## Mapa do desafio
+
+Onde cada parte do PDF está atendida e como verificar:
+
+| Seção do desafio | Onde está | Como verificar |
+|---|---|---|
+| Três ferramentas, mocks e regra "só aberto escalona" | `src/agent/tools.ts`, `src/agent/domain/` | `tests/domain.test.ts`, `tests/approval.test.ts` (T02) |
+| 01 Fluxo e estado (LangGraph, estado tipado, contratos, sessões) | `src/agent/graph.ts`, `executor.ts`, `domain/schemas.ts` | `tests/graph.test.ts` (T01, T07) |
+| 02 Pausa e aprovação (interrupt, UI, validação no backend, idempotência) | `graph.ts` (`humanApproval`), `approval.ts`, `src/app/chat.tsx` | `tests/approval.test.ts` (T02–T04), `tests/api.test.ts`, UI |
+| 03 Falhas e limites (falhas simuladas, timeout, tentativas, orçamento) | `faults.ts`, `run.ts`, políticas dos nós em `graph.ts` | `tests/limits.test.ts` (T05, T06), `SIMULATE_TOOL_FAILURE=… npm run smoke` |
+| 04 LangSmith (traces com correlação, sem segredos) | `run.ts` (identidade do trace), `src/app/api/chat/http.ts` (envio) | `tests/tracing.test.ts`; projeto de tracing no LangSmith |
+| 05 Evaluation (dataset, avaliador por código, experimento com modelo real) | `evals/` | `tests/evaluators.test.ts`, `npm run eval`, `npm run eval:demo` |
+| 06 Cenários essenciais com modelo falso, separados da avaliação | `tests/` | `npm test` (117 testes, offline) |
 
 ---
 
@@ -61,7 +77,7 @@ npm run smoke
 # smoke com falha simulada: cada chamada de listar_chamados falha 2 vezes e depois funciona
 SIMULATE_TOOL_FAILURE=listar_chamados:error:2 npm run smoke
 
-# avaliação no LangSmith com o modelo real (3 repetições por caso, cerca de 1,5 min)
+# avaliação no LangSmith com o modelo real (4 casos × 3 repetições, cerca de 2,5 min)
 npm run eval
 
 # experimentos de demonstração do avaliador (respostas fabricadas, sem modelo, segundos)
@@ -94,7 +110,7 @@ Modos de falha: `error` (exceção transitória), `timeout` (a tool trava até o
 | `tests/api.test.ts` | Rotas Next.js chamadas direto: códigos HTTP, proposta pendente (409), sessões isoladas, envio de traces agendado |
 | `tests/guard.test.ts` | Guard da resposta final: afirmação sem ação, dado sem fonte, pedido de escalonamento ignorado |
 | `tests/tracing.test.ts` | Árvore de runs enviada ao LangSmith (capturada em memória): nome, tags e metadata da mensagem e da retomada; nós, modelo e tool com args e resultado |
-| `tests/evaluators.test.ts` | Avaliador da avaliação: aprova a execução correta e reprova consulta pulada, chamado inventado ou omitido, argumento errado, consulta com falha e efeito colateral; caso adicional pelo grafo, com a aprovação feita por código |
+| `tests/evaluators.test.ts` | Avaliador da avaliação: aprova a execução correta e reprova consulta pulada, chamado inventado ou omitido, argumento errado, consulta com falha e efeito colateral; caso adicional pelo grafo, com a aprovação feita por código; busca por cliente, incluindo o id chutado que passa pelo guard; sincronização do dataset e demonstrações |
 
 ---
 
@@ -162,7 +178,16 @@ O avaliador lê os resultados das tools, que só existem se o executor executou 
 3. **Clique numa linha:** abre o trace completo do agente naquela execução, com modelo, nós, tool, argumentos e resultado, e no caso adicional também a aprovação e a retomada.
 4. **Compare** o experimento real com os de demonstração: o real fica com `pass` = 1; `demo-pula-consulta` reprova em `tool_called`, e `demo-inventa-chamado` em `answer_matches_tool`.
 
-**Resultado de referência** (2026-10-21, com os 2 primeiros casos): **6/6 `pass`** (2 casos × 3 repetições). Os casos de busca por cliente (D51) entraram depois. Na sondagem com o modelo real, eles **falham**: é o registro do problema antes da correção. No caso adicional, a resposta "já foi escalonado" veio do resultado da aprovação no histórico, sem nova consulta. Com `temperature: 0`, as repetições saíram idênticas. Isso mostra que estes cenários são estáveis, mas não que o modelo seja robusto a texto livre (ver Limitações).
+**Resultado de referência** (2026-10-22, experimento `aurora-qwen2.5:7b-instruct-q4_K_M-a3a9f02f`, commit `adc324e`): **6/12 `pass`**.
+
+| Caso | `pass` | Critérios que falharam |
+|---|---|---|
+| Obrigatório (listar abertos) | 3/3 | — |
+| Adicional (status após aprovação) | 3/3 | — |
+| Busca: "qual o chamado da Padaria?" | 0/3 | `answer_identifies_ticket`: a lista trouxe o CH-101, mas a resposta descreve os dois chamados sem dizer qual é |
+| Busca: "Qual é o chamado da Transportadora Rota Sul?" | 0/3 | `ticket_found_by_tool` e `answer_identifies_ticket`: o modelo consulta o CH-101 (id do exemplo da tool) e responde que é da Transportadora |
+
+As falhas da busca por cliente são uma **limitação conhecida e mantida de propósito** no dataset: elas registram o problema medido (ver Limitações e [D51](docs/decisoes.md)). No caso adicional, a resposta "já foi escalonado" veio do resultado da aprovação no histórico, sem nova consulta. Com `temperature: 0`, as repetições saem idênticas. Isso mostra que os cenários aprovados são estáveis, mas não que o modelo seja robusto a texto livre.
 
 ---
 
