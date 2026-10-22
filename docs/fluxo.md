@@ -3,7 +3,7 @@
 Mostra **quem chama quem** entre os arquivos quando o assistente roda. Atualizado ao fim de cada passo.
 Os diagramas são Mermaid (renderizam no GitHub e no preview de Markdown do VS Code).
 
-**Estado atual:** Passo 9a. A UI de chat (`src/app/chat.tsx`) usa a API Next.js (`/api/chat` e `/api/chat/decision`), que expõe o agente: consulta, escalonamento com aprovação humana, retry, timeout e limites. Toda execução gera um trace no LangSmith (seção 9). A avaliação (`evals/`) roda os casos pelas mesmas portas de entrada e confere o que de fato executou (seção 10). Por enquanto ela roda offline, e o experimento no LangSmith entra no 9b.
+**Estado atual:** Passo 9a. A UI de chat (`src/app/chat.tsx`) usa a API Next.js (`/api/chat` e `/api/chat/decision`), que expõe o agente: consulta, escalonamento com aprovação humana, retry, timeout e limites. Toda execução gera um trace no LangSmith (seção 9). A avaliação (`evals/`) roda os casos pelas mesmas portas de entrada e confere o que de fato executou (seção 10): offline nos testes e no LangSmith com `npm run eval`.
 
 ---
 
@@ -387,9 +387,20 @@ flowchart TD
     TG -->|"getState: mensagens do turno"| REC["registro por turno<br/>answer · tool_calls · tool_results<br/>proposal · decision · error<br/>+ escalonamentos registrados"]
     REC --> EV["evals/evaluators.ts · evaluateCase<br/>uma nota 0/1 por critério + pass"]
     DS -->|"referência"| EV
-    EV --> T["tests/evaluators.test.ts<br/>offline, modelo falso (9a)"]
-    EV -.-> LS["evaluate() no LangSmith<br/>modelo real (9b)"]
+    EV --> T["tests/evaluators.test.ts<br/>offline, modelo falso"]
+    EV --> RUN["evals/run.ts · evaluate()<br/>npm run eval: qwen, 3 repetições<br/>npm run eval:demo: respostas fabricadas"]
+    SY["evals/sync.ts · syncDataset<br/>cria o que falta, apaga o que saiu"] --> LS[("LangSmith<br/>dataset aurora-suporte<br/>+ experimentos")]
+    DS --> SY
+    RUN -->|"notas + traces"| LS
 ```
+
+`npm run eval` faz quatro coisas, nesta ordem:
+1. sincroniza o dataset com o código (D48);
+2. chama `evaluate()` com o target real (`createChatModel()`), um caso por vez e 3 repetições (D49);
+3. passa os resultados pelo avaliador, por meio de um adaptador de tipos;
+4. espera o envio dos traces.
+
+Cada run do experimento contém o trace do agente aninhado (`aurora_message`, `humanApproval`, `aurora_resume`). `npm run eval:demo` roda os dois experimentos de demonstração (D50).
 
 - O avaliador nunca lê a "opinião" do modelo sobre o que fez. Ele lê os `ToolMessage`, que só existem se o executor executou a tool, pareados com a tool call pelo `tool_call_id`.
 - **Caso obrigatório:** `tool_called` (exatamente `{"situacao":"aberto"}`), `tool_succeeded`, `tool_matches_reference`, `answer_matches_tool` (sem omissão nem extra) e `no_side_effects`.
@@ -411,3 +422,4 @@ flowchart TD
 | 7 (ajuste 2) | Nó `checkReply` (`guard.ts`) após a resposta final: correção única ou mensagem honesta quando a resposta afirma ação não feita, cita dado sem fonte ou ignora pedido explícito de escalonamento (D40). UI com "Como usar" e ações rápidas (D41). |
 | 8 | Tracing: `runAgent` nomeia e etiqueta cada execução (`aurora_message`/`aurora_resume`, D43); as rotas agendam `awaitAllCallbacks()` com `after()` e o smoke aguarda no `finally` (D42); nova seção 9. |
 | 9a | `evals/`: dataset, target (`runCase`, runtime novo por caso, aprovação por código) e avaliador por código (`evaluateCase`), testados offline; nova seção 10 (D45–D47). |
+| 9b | `evals/run.ts` (`npm run eval` e `eval:demo`), `evals/sync.ts` (dataset sincronizado) e `evals/demo.ts` (demonstrações do avaliador); seção 10 atualizada (D48–D50). |

@@ -526,6 +526,36 @@ Formato: data · contexto · opções · decisão · motivo (e risco, quando a d
 - **Motivo:** reproduz o bug real da D38 (resposta de acompanhamento a partir do histórico) e mostra aprovação e retomada dentro do experimento. Se o 7B falhar no turno 1, o caso reprova no pré-requisito, e isso é um resultado honesto.
 - **Limite:** a afirmação e a negação são reconhecidas por padrões de texto em PT, com a mesma limitação do guard. O "ESC-001" não é exigido no texto, porque no smoke o modelo respondeu certo sem citá-lo.
 
+## D48 — Dataset do LangSmith sincronizado com o código a cada execução
+- **Data:** 2026-10-21
+- **Opções:** (1) criar só se não existir · (2) sincronizar a cada execução · (3) apagar e recriar sempre, o que apaga os experimentos antigos.
+- **Decisão:** (2), recomendação do Claude, aprovada pelo Guilherme. `evals/sync.ts`: `syncDataset` cria o dataset `aurora-suporte` se não existir. `planSync`, uma função pura, compara inputs e gabarito dos examples com os `CASES`: cria os que faltam e apaga os que saíram do código ou ficaram duplicados. Um caso alterado vira apagar mais criar. A comparação ignora a ordem das chaves devolvida pela API.
+- **Motivo:** o `evals/dataset.ts` é a única fonte. Um caso novo, como numa alteração ao vivo, aparece no próximo `npm run eval`. Cada mudança gera uma versão nova do dataset, e os experimentos antigos continuam ligados à versão que usaram. A exclusão é lógica (padrão do SDK).
+- **Teste:** `planSync` em `tests/evaluators.test.ts`: dataset vazio, dataset igual com as chaves em outra ordem, caso novo e caso removido, gabarito alterado e duplicado. Mutação: as 3 alterações foram pegas.
+- **Verificado:** a primeira execução criou 2 examples; as seguintes, 0 criados e 0 removidos.
+
+## D49 — Experimento com o modelo real: 3 repetições por caso
+- **Data:** 2026-10-21
+- **Opções:** 1, 3 ou 5 ou mais repetições.
+- **Decisão:** 3 (`REPETITIONS` em `evals/run.ts`), recomendação do Claude, aprovada pelo Guilherme. Os casos rodam um de cada vez (`maxConcurrency: 1`): o Ollama local atende uma requisição por vez, e em paralelo os casos estourariam o limite de 120 s.
+- **Configuração registrada no experimento (R19):** prefixo `aurora-<modelo>` e metadata `{ provider: "ollama", model, temperature: 0, repetitions, limits }`. O LangSmith acrescenta sozinho o git (`commit`, `dirty`, `branch`, `remoteUrl`) e a versão do dataset. Por isso a função própria de commit, que chegou a ser escrita, foi removida.
+- **Resultado (2026-10-21, `qwen2.5:7b-instruct-q4_K_M`, commit `7ed9def` com mudanças locais):** **6/6 `pass`**.
+  - Caso obrigatório: 3/3, sempre com `listar_chamados({"situacao":"aberto"})`.
+  - Caso adicional: 3/3. A aprovação foi feita pelo target, e a resposta "O chamado CH-101 já foi escalonado…" veio **sem nova consulta**, a partir do resultado da aprovação no histórico (D38 F1b).
+  - As três repetições foram idênticas (`temperature: 0`). Cerca de 90 s no total.
+  - Cada run do experimento abre o trace completo do agente (`aurora_message`, `humanApproval`, `aurora_resume`…), aninhado sob o run do caso.
+- **Leitura honesta:** 3/3 com `temperature: 0` mostra que esses dois cenários, com essas frases, são estáveis. Não mostra robustez a texto livre, que continua sendo o ponto fraco do 7B (D39).
+
+## D50 — Demonstração do avaliador dentro do LangSmith
+- **Data:** 2026-10-21
+- **Opções:** (1) só os testes no terminal · (2) o grafo com um modelo falso mal-comportado, em que o guard trocaria a resposta e confundiria a demonstração · (3) respostas fabricadas e rotuladas.
+- **Decisão:** (3), recomendação do Claude, aprovada pelo Guilherme. `npm run eval:demo` (`evals/demo.ts`) roda dois experimentos só com o caso obrigatório:
+  - `demo-pula-consulta`: o texto certo, sem nenhuma tool;
+  - `demo-inventa-chamado`: o resultado real de `listar_chamados`, com uma resposta que cita CH-105.
+
+  Os nomes e as descrições deixam claro que não é o agente.
+- **Verificado:** `demo-pula-consulta` deu `tool_called`=0 e `pass`=0. `demo-inventa-chamado` deu `answer_matches_tool`=0 ("extras ou inventados: CH-105") e `pass`=0. O mesmo resultado é conferido offline em `tests/evaluators.test.ts`.
+
 ---
 
 ## Propostas em aberto (confirmar no passo indicado)

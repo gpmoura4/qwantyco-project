@@ -4,7 +4,7 @@ Desafio técnico Qwantyco. Assistente de suporte da empresa fictícia **Aurora**
 
 **Stack:** TypeScript 5.9 (`strict`) · Next.js 16 (App Router) · React 19 · LangGraph 1.5 · LangChain Core 1.2 · Zod 4 · Vitest 5 · LangSmith · LLM local via Ollama (`qwen2.5:7b-instruct-q4_K_M`).
 
-> **Estado:** núcleo, aprovação humana, falhas e limites, API, UI de chat e tracing no LangSmith estão prontos e testados. O dataset e o avaliador por código da **avaliação** estão prontos e testados offline. Falta o **experimento no LangSmith com o modelo real**. Andamento por passo em [`docs/plano.md`](docs/plano.md); requisitos e status em [`docs/requisitos.md`](docs/requisitos.md).
+> **Estado:** núcleo, aprovação humana, falhas e limites, API, UI de chat e tracing no LangSmith estão prontos e testados. A **avaliação** (dataset, avaliador por código e experimento com o modelo real) roda no LangSmith. Falta a revisão final. Andamento por passo em [`docs/plano.md`](docs/plano.md); requisitos e status em [`docs/requisitos.md`](docs/requisitos.md).
 
 ---
 
@@ -60,6 +60,12 @@ npm run smoke
 
 # smoke com falha simulada: cada chamada de listar_chamados falha 2 vezes e depois funciona
 SIMULATE_TOOL_FAILURE=listar_chamados:error:2 npm run smoke
+
+# avaliação no LangSmith com o modelo real (3 repetições por caso, cerca de 1,5 min)
+npm run eval
+
+# experimentos de demonstração do avaliador (respostas fabricadas, sem modelo, segundos)
+npm run eval:demo
 ```
 
 Modos de falha: `error` (exceção transitória), `timeout` (a tool trava até o timeout) e `invalid_output` (saída fora do contrato). O formato é `tool:modo:vezes`, e várias falhas podem ser separadas por vírgula.
@@ -107,7 +113,7 @@ Com `LANGSMITH_TRACING=true`, cada execução do agente gera um trace no projeto
 
 ## Avaliação (LangSmith)
 
-O código fica em [`evals/`](evals/). O dataset e o avaliador estão prontos e testados offline. O experimento com o modelo real no LangSmith (`npm run eval`) entra no Passo 9b do [plano](docs/plano.md).
+O código fica em [`evals/`](evals/). Precisa do Ollama rodando e de `LANGSMITH_API_KEY` no `.env`.
 
 **Dataset** (`evals/dataset.ts`)
 | Caso | Mensagens | O que se espera |
@@ -123,7 +129,34 @@ O caso adicional reproduz um problema real encontrado durante o desenvolvimento:
 - **Obrigatório:** `tool_called`, `tool_succeeded`, `tool_matches_reference`, `answer_matches_tool` e `no_side_effects`.
 - **Adicional:** `escalation_registered`, `answer_matches_status` e `answer_ids_backed`.
 
-O avaliador lê os resultados das tools, que só existem se o executor executou a tool. Por isso, uma resposta com o texto certo mas **sem a consulta reprova**, e uma resposta que **inventa um chamado reprova**. As duas situações são demonstradas em `tests/evaluators.test.ts`.
+O avaliador lê os resultados das tools, que só existem se o executor executou a tool. Por isso, uma resposta com o texto certo mas **sem a consulta reprova**, e uma resposta que **inventa um chamado reprova**. As duas situações são demonstradas offline em `tests/evaluators.test.ts` e no LangSmith com `npm run eval:demo`.
+
+**Como rodar**
+- `npm run eval`:
+  1. sincroniza o dataset `aurora-suporte` com `evals/dataset.ts`, criando os casos novos e removendo os que saíram do código;
+  2. roda o experimento `aurora-<modelo>-…` com o modelo real, **3 repetições por caso**, um caso por vez.
+- `npm run eval:demo`: roda dois experimentos **rotulados como demonstração**, só com o caso obrigatório e com respostas fabricadas, que não são o agente:
+  - `demo-pula-consulta`: o texto certo, sem nenhuma tool;
+  - `demo-inventa-chamado`: a tool executada de verdade, mas a resposta cita CH-105.
+
+**Modelo e configuração do experimento (registrados na metadata)**
+| Item | Valor |
+|---|---|
+| Modelo | `qwen2.5:7b-instruct-q4_K_M` (local, via Ollama; definido em `OLLAMA_MODEL`) |
+| Parâmetros | `temperature: 0` |
+| Limites | 12 passos e 120 s por invocação; tool com 5 s e 3 tentativas; modelo com 60 s e 2 tentativas |
+| Repetições | 3 por caso, um caso por vez |
+| Código | Commit do git (o LangSmith registra automaticamente, inclusive se há mudanças não commitadas) |
+
+**Como conferir no LangSmith**
+1. **Datasets & Experiments → `aurora-suporte`**:
+   - aba **Examples**: os casos e o gabarito;
+   - aba **Experiments**: cada execução, com a média de cada critério.
+2. **Abra um experimento:** uma linha por execução de caso e uma coluna por critério (`tool_called`, `answer_matches_tool`, …, `pass`). Clique na nota para ver o comentário, por exemplo *"na resposta: CH-101, CH-103; omitidos: nenhum; extras ou inventados: nenhum"*.
+3. **Clique numa linha:** abre o trace completo do agente naquela execução, com modelo, nós, tool, argumentos e resultado, e no caso adicional também a aprovação e a retomada.
+4. **Compare** o experimento real com os de demonstração: o real fica com `pass` = 1; `demo-pula-consulta` reprova em `tool_called`, e `demo-inventa-chamado` em `answer_matches_tool`.
+
+**Resultado de referência** (2026-10-21): **6/6 `pass`** (os 2 casos × 3 repetições). No caso adicional, a resposta "já foi escalonado" veio do resultado da aprovação no histórico, sem nova consulta. Com `temperature: 0`, as repetições saíram idênticas. Isso mostra que estes cenários são estáveis, mas não que o modelo seja robusto a texto livre (ver Limitações).
 
 ---
 
@@ -176,7 +209,7 @@ docs/               plano, requisitos, decisões e fluxo
 
 ## Decisões
 
-Todas as decisões, com contexto, opções e motivo, estão em [`docs/decisoes.md`](docs/decisoes.md) (D01–D47). As principais:
+Todas as decisões, com contexto, opções e motivo, estão em [`docs/decisoes.md`](docs/decisoes.md) (D01–D50). As principais:
 
 - **LLM local via Ollama** (D07, D25, D39): sem custo e sem chave de API. O `qwen2.5:7b` foi escolhido num smoke comparativo de tool calling.
 - **Executor próprio em vez de `ToolNode`/`createAgent`** (D23): a validação de allowlist, argumentos, regras e saída fica explícita e num lugar só.
@@ -186,7 +219,7 @@ Todas as decisões, com contexto, opções e motivo, estão em [`docs/decisoes.m
 - **Retry e timeout nativos do LangGraph e orçamento por invocação** (D29, D30): erros de negócio são dados e nunca são retentados.
 - **Guard da resposta final** (D40): confere o texto contra as tool calls e os resultados.
 - **Tracing** (D42–D44): identidade de cada execução, envio garantido com `after()` e nenhum segredo nos traces.
-- **Avaliação** (D45–D47): `evaluate()` do LangSmith; o avaliador lê o registro do que executou, não o texto do modelo; o caso adicional passa por uma aprovação feita por código.
+- **Avaliação** (D45–D50): `evaluate()` do LangSmith, dataset sincronizado com o código, 3 repetições e demonstrações rotuladas; o avaliador lê o registro do que executou, não o texto do modelo; o caso adicional passa por uma aprovação feita por código.
 
 ---
 
@@ -197,5 +230,5 @@ Todas as decisões, com contexto, opções e motivo, estão em [`docs/decisoes.m
 - **Estado em memória:** sessões (`MemorySaver`) e escalonamentos se perdem quando o servidor reinicia. É um processo só, sem banco nem fila.
 - **Sem autenticação:** a sessão é um UUID gerado pelo navegador. O backend isola sessões entre si, mas não identifica usuários.
 - **Uma proposta pendente por vez** em cada sessão; mensagens novas são recusadas (409) até a decisão.
-- **Experimento no LangSmith ainda não executado** (Passo 9b). O avaliador confere os "dados inventados" pelos ids de chamado e escalonamento; um título ou cliente errado no texto livre não é detectado ([D46](docs/decisoes.md)).
+- **Avaliação com 2 casos e frases fixas:** o 6/6 vale para esses cenários. O avaliador confere os "dados inventados" pelos ids de chamado e escalonamento; um título ou cliente errado no texto livre não é detectado ([D46](docs/decisoes.md)).
 - Só dados fictícios; sem deploy público.

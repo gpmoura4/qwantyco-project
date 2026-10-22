@@ -4,7 +4,9 @@ import { describe, expect, it } from "vitest";
 import { createEscalationStore, listTicketViews } from "@/agent/domain/escalations";
 import { fail, type Proposal } from "@/agent/domain/schemas";
 import { CASES, type CaseReference } from "../evals/dataset";
+import { DEMOS } from "../evals/demo";
 import { evaluateCase } from "../evals/evaluators";
+import { planSync } from "../evals/sync";
 import { runCase, type CaseOutputs, type TurnRecord } from "../evals/target";
 
 // Offline checks of the evaluation (R16–R18): the evaluator passes a correct run
@@ -218,5 +220,53 @@ describe("Additional case through the graph (status after approval, P10)", () =>
       escalation_registered: 0,
       pass: 0,
     });
+  });
+});
+
+describe("Evaluator demonstrations (npm run eval:demo, D50)", () => {
+  it.each([
+    ["demo-pula-consulta", { tool_called: 0, pass: 0 }],
+    ["demo-inventa-chamado", { tool_called: 1, answer_matches_tool: 0, pass: 0 }],
+  ])("%s is failed by the evaluator", (name, expected) => {
+    const demo = DEMOS.find((d) => d.name === name)!;
+
+    const outputs = demo.target(LIST_CASE.inputs);
+
+    expect(scores(outputs, LIST_CASE.reference)).toMatchObject(expected);
+  });
+});
+
+describe("Dataset sync plan (D48)", () => {
+  // As the API returns them: same content, but keys in another order.
+  const asStored = (id: string, c: (typeof CASES)[number]) => ({
+    id,
+    inputs: JSON.parse(JSON.stringify(c.inputs)),
+    outputs: Object.fromEntries(Object.entries(c.reference).reverse()),
+  });
+
+  it("creates every case in an empty dataset", () => {
+    expect(planSync(CASES, [])).toEqual({ toCreate: CASES, toDelete: [] });
+  });
+
+  it("changes nothing when the dataset already matches the code", () => {
+    const existing = CASES.map((c, i) => asStored(`ex-${i}`, c));
+
+    expect(planSync(CASES, existing)).toEqual({ toCreate: [], toDelete: [] });
+  });
+
+  it("creates a new case and deletes one removed from the code", () => {
+    const existing = [
+      asStored("ex-0", CASES[0]),
+      { id: "ex-old", inputs: { messages: ["Caso antigo."] }, outputs: { kind: "list_open" } },
+    ];
+
+    expect(planSync(CASES, existing)).toEqual({ toCreate: [CASES[1]], toDelete: ["ex-old"] });
+  });
+
+  it("replaces a case whose reference changed, and removes duplicates", () => {
+    const changed = { ...asStored("ex-0", CASES[0]), outputs: { kind: "list_open", expected_ids: ["CH-101"] } };
+    const existing = [changed, asStored("ex-1", CASES[1]), asStored("ex-1-dup", CASES[1])];
+
+    expect(planSync(CASES, existing)).toEqual({ toCreate: [CASES[0]], toDelete: ["ex-0", "ex-1-dup"] });
   });
 });
